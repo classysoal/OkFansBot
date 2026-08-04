@@ -84,10 +84,11 @@ def init_db():
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS required_channels (
-            channel_id BIGINT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
+            channel_id BIGINT UNIQUE,
             label VARCHAR(255) NOT NULL,
             title VARCHAR(255) NOT NULL,
-            invite_link VARCHAR(255) NOT NULL,
+            invite_link VARCHAR(255) UNIQUE NOT NULL,
             channel_type VARCHAR(50) DEFAULT 'starter',
             verification_method VARCHAR(50) DEFAULT 'direct_join',
             is_active INT DEFAULT 1,
@@ -99,11 +100,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS join_events (
             event_id SERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL REFERENCES users(user_id),
-            channel_id BIGINT NOT NULL REFERENCES required_channels(channel_id),
+            channel_db_id INT NOT NULL REFERENCES required_channels(id),
             status VARCHAR(50) DEFAULT 'requested',
             verified INT DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, channel_id)
+            UNIQUE(user_id, channel_db_id)
         );
         """)
 
@@ -190,10 +191,11 @@ def init_db():
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS required_channels (
-            channel_id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id BIGINT UNIQUE,
             label TEXT NOT NULL,
             title TEXT NOT NULL,
-            invite_link TEXT NOT NULL,
+            invite_link TEXT UNIQUE NOT NULL,
             channel_type TEXT CHECK(channel_type IN ('starter', 'referral', 'bonus', 'hidden', 'inactive')) DEFAULT 'starter',
             verification_method TEXT CHECK(verification_method IN ('join_request', 'direct_join')) DEFAULT 'direct_join',
             is_active INTEGER DEFAULT 1,
@@ -205,11 +207,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS join_events (
             event_id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(user_id),
-            channel_id INTEGER NOT NULL REFERENCES required_channels(channel_id),
+            channel_db_id INTEGER NOT NULL REFERENCES required_channels(id),
             status TEXT CHECK(status IN ('requested', 'joined', 'left')) DEFAULT 'requested',
             verified INTEGER DEFAULT 0 CHECK(verified IN (0, 1)),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, channel_id)
+            UNIQUE(user_id, channel_db_id)
         );
         """)
 
@@ -423,10 +425,10 @@ def save_required_channel(channel_id: int, label: str, title: str, invite_link: 
             cursor.execute("""
                 INSERT INTO required_channels (channel_id, label, title, invite_link, channel_type, verification_method, is_active, priority)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (channel_id) DO UPDATE SET
+                ON CONFLICT (invite_link) DO UPDATE SET
+                    channel_id = COALESCE(excluded.channel_id, required_channels.channel_id),
                     label = excluded.label,
                     title = excluded.title,
-                    invite_link = excluded.invite_link,
                     channel_type = excluded.channel_type,
                     verification_method = excluded.verification_method,
                     is_active = excluded.is_active,
@@ -434,8 +436,40 @@ def save_required_channel(channel_id: int, label: str, title: str, invite_link: 
             """, (channel_id, label, title, invite_link, channel_type, verification_method, is_active, priority))
             return True
     except Exception as e:
-        logging.error(f"Error in save_required_channel {channel_id}: {e}")
+        logging.error(f"Error in save_required_channel: {e}")
         return False
+    finally:
+        conn.close()
+
+def resolve_channel_id_by_invite(invite_link: str, channel_id: int) -> int:
+    """
+    Looks up a channel by invite_link.
+    If its channel_id is currently NULL or different, updates it to the real channel_id.
+    Returns the database primary key `id` of the channel.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            # Clean invite link strings to ensure safe mapping
+            clean_link = invite_link.strip()
+            cursor.execute("SELECT id, channel_id FROM required_channels WHERE invite_link = %s", (clean_link,))
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("SELECT id, channel_id FROM required_channels WHERE invite_link LIKE %s", (f"%{clean_link}%",))
+                row = cursor.fetchone()
+                
+            if row:
+                db_id = row['id']
+                existing_cid = row['channel_id']
+                if existing_cid is None or existing_cid != channel_id:
+                    cursor.execute("UPDATE required_channels SET channel_id = %s WHERE id = %s", (channel_id, db_id))
+                    logging.info(f"Dynamically resolved channel ID for {invite_link} to {channel_id}")
+                return db_id
+            return None
+    except Exception as e:
+        logging.error(f"Error in resolve_channel_id_by_invite for {invite_link}: {e}")
+        return None
     finally:
         conn.close()
 
@@ -454,29 +488,29 @@ def delete_required_channel(channel_id: int) -> bool:
 
 # --- JOIN EVENTS & VERIFICATION ---
 
-def record_join_event(user_id: int, channel_id: int, status: str) -> bool:
+def record_join_event(user_id: int, channel_db_id: int, status: str) -> bool:
     conn = get_db_connection()
     try:
         with conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO join_events (user_id, channel_id, status, verified)
+                INSERT INTO join_events (user_id, channel_db_id, status, verified)
                 VALUES (%s, %s, %s, 0)
-                ON CONFLICT(user_id, channel_id) DO UPDATE SET
+                ON CONFLICT(user_id, channel_db_id) DO UPDATE SET
                     status = excluded.status
-            """, (user_id, channel_id, status))
+            """, (user_id, channel_db_id))
             return True
     except Exception as e:
-        logging.error(f"Error recording join event for user {user_id}, channel {channel_id}: {e}")
+        logging.error(f"Error recording join event for user {user_id}, db_id {channel_db_id}: {e}")
         return False
     finally:
         conn.close()
 
-def get_join_event(user_id: int, channel_id: int) -> dict:
+def get_join_event(user_id: int, channel_db_id: int) -> dict:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM join_events WHERE user_id = %s AND channel_id = %s", (user_id, channel_id))
+        cursor.execute("SELECT * FROM join_events WHERE user_id = %s AND channel_db_id = %s", (user_id, channel_db_id))
         row = cursor.fetchone()
         return dict(row) if row else None
     except Exception as e:
@@ -485,23 +519,23 @@ def get_join_event(user_id: int, channel_id: int) -> dict:
     finally:
         conn.close()
 
-def verify_join(user_id: int, channel_id: int) -> bool:
+def verify_join(user_id: int, channel_db_id: int) -> bool:
     conn = get_db_connection()
     try:
         with conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT verified FROM join_events WHERE user_id = %s AND channel_id = %s", (user_id, channel_id))
+            cursor.execute("SELECT verified FROM join_events WHERE user_id = %s AND channel_db_id = %s", (user_id, channel_db_id))
             row = cursor.fetchone()
             if row and row['verified'] == 1:
                 return False
 
             cursor.execute("""
-                INSERT INTO join_events (user_id, channel_id, status, verified)
+                INSERT INTO join_events (user_id, channel_db_id, status, verified)
                 VALUES (%s, %s, 'joined', 1)
-                ON CONFLICT(user_id, channel_id) DO UPDATE SET
+                ON CONFLICT(user_id, channel_db_id) DO UPDATE SET
                     status = 'joined',
                     verified = 1
-            """, (user_id, channel_id))
+            """, (user_id, channel_db_id))
             
             cursor.execute("UPDATE users SET verified_channels_count = verified_channels_count + 1 WHERE user_id = %s", (user_id,))
             return True

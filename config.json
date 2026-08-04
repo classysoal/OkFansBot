@@ -2,19 +2,240 @@
   "owner_id": 6193742824,
   "required_channels": [
     {
-      "channel_id": -1003585477205,
-      "label": "Required Channel 1",
-      "title": "OkFans Required Channel",
-      "invite_link": "https://t.me/OkFansRequiredChannel",
+      "channel_id": null,
+      "label": "𝗧ʜᴇ 𝗙ʀɪᴇɴᴅᴏʀɪᴀ 💗 ✨",
+      "title": "𝗧ʜᴇ 𝗙ʀɪᴇɴᴅᴏʀɪᴀ 💗 ✨",
+      "invite_link": "https://t.me/+Ebn8tjHLyU05ZDMx",
       "channel_type": "starter",
-      "verification_method": "direct_join",
+      "verification_method": "join_request",
       "is_active": 1,
       "priority": 1
+    },
+    {
+      "channel_id": null,
+      "label": "🇮🇳",
+      "title": "🇮🇳",
+      "invite_link": "https://t.me/+Lgzjms8z2qk1OGE1",
+      "channel_type": "starter",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 2
+    },
+    {
+      "channel_id": null,
+      "label": "⏤𝗖𝗔𝗡𝗗𝗬 𝗛𝗢𝗨𝗦Ｅ • 🇮🇳",
+      "title": "⏤𝗖𝗔𝗡𝗗𝗬 𝗛𝗢𝗨𝗦Ｅ • 🇮🇳",
+      "invite_link": "https://t.me/+UE-BURDKLMU1YjA1",
+      "channel_type": "starter",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 3
+    },
+    {
+      "channel_id": null,
+      "label": "『𝗦𝗜𝗚𝗠𝗔』× [ 𝐁ᴏᴛ 𝐌ᴀᴋᴇ 𝐫 ]",
+      "title": "『𝗦𝗜𝗚𝗠𝗔』× [ 𝐁ᴏᴛ 𝐌ᴀᴋᴇ 𝐫 ]",
+      "invite_link": "https://t.me/+9AMyHonKwnAxYTRl",
+      "channel_type": "starter",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 4
+    },
+    {
+      "channel_id": null,
+      "label": "𝐒𝐈𝐆𝐌𝐀𝐃𝐎𝐗 🍁",
+      "title": "𝐒𝐈𝐆𝐌𝐀𝐃𝐎𝐗 🍁",
+      "invite_link": "https://t.me/+f4rfzvz_dNNjZWE1",
+      "channel_type": "starter",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 5
+    },
+    {
+      "channel_id": null,
+      "label": "𝗣𝗔𝗬𝗔𝗟 𝗚𝗔𝗠𝗜𝗡𝗚 𝗩𝗜𝗗𝗘𝗢",
+      "title": "𝗣𝗔𝗬𝗔𝗟 𝗚𝗔𝗠𝗜𝗡𝗚 𝗩𝗜𝗗𝗘𝗢",
+      "invite_link": "https://t.me/+TFN4RQYBYw4wYmI9",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 6
+    },
+    {
+      "channel_id": null,
+      "label": "𓆩 簽 𝗣𝗥𝗜𝗩𝗔𝗧𝗘 𝗖𝗡𝗟 𓆪",
+      "title": "𓆩 簽 𝗣𝗥𝗜𝗩𝗔𝗧𝗘 𝗖𝗡𝗟 𓆪",
+      "invite_link": "https://t.me/+qClFdfb1d8xjZGU9",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 7
+    },
+    {
+      "channel_id": null,
+      "label": "𓆩 𝗭𝗘𝗫𝗫 𝗣𝗔𝗜𝗗 𝗖𝗢𝗨𝗥𝗦𝗘𝗦 𓆪",
+      "title": "𓆩 𝗭𝗘𝗫𝗫 𝗣𝗔𝗜𝗗 𝗖𝗢𝗨𝗥𝗦Ｅ𝗦 𓆪",
+      "invite_link": "https://t.me/+yOFEAk19m-gzNjY9",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 8
+    },
+    {
+      "channel_id": null,
+      "label": "𓆩 𝗧𝗢𝗫𝗜𝗖 🇮🇳",
+      "title": "𓆩 𝗧𝗢𝗫𝗜𝗖 🇮🇳",
+      "invite_link": "https://t.me/+I5ewZ-_hIPxhOWFl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 9
+    },
+    {
+      "channel_id": null,
+      "label": "⏤𝗦𝗧𝗥𝗘𝗔𝗠 𝗗𝗥𝗢𝗣 • 🇮🇳",
+      "title": "⏤𝗦𝗧𝗥𝗘𝗔𝗠 𝗗𝗥𝗢𝗣 • 🇮🇳",
+      "invite_link": "https://t.me/+zrDTnqK2fpphMTc1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 10
+    },
+    {
+      "channel_id": null,
+      "label": "ᯓ𝁘ໍ⋆ 𝛂֟ℓρнα°» 🜲 <🥀/>",
+      "title": "ᯓ𝁘ໍ⋆ 𝛂֟ℓρнα°» 🜲 <🥀/>",
+      "invite_link": "https://t.me/+ceWVlD_GTRwxZTFl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 11
+    },
+    {
+      "channel_id": null,
+      "label": "𝐖𝐈𝐓𝐂𝐇𝐄𝐑 • 𝐕𝐈𝐒𝐈𝐎𝐍",
+      "title": "𝐖𝐈𝐓𝐂𝐇𝐄𝐑 • 𝐕𝐈𝐒𝐈𝐎𝐍",
+      "invite_link": "https://t.me/+48A2bSlQl0djNzFl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 12
+    },
+    {
+      "channel_id": null,
+      "label": "𝗣🇮🇷𝗢 🛍️",
+      "title": "𝗣🇮🇷𝗢 🛍️",
+      "invite_link": "https://t.me/+180XMME5iOtlYmM1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 13
+    },
+    {
+      "channel_id": null,
+      "label": "Aᴇsᴛʜᴇᴛɪᴄ>>♡♡",
+      "title": "Aᴇsᴛʜᴇᴛɪᴄ>>♡♡",
+      "invite_link": "https://t.me/+jL5glmcfs21mMWY1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 14
+    },
+    {
+      "channel_id": null,
+      "label": "𝐏𝐍𝐋 𝐗 𝐇𝐀𝐂𝐊",
+      "title": "𝐏𝐍𝐋 𝐗 𝐇𝐀𝐂𝐊",
+      "invite_link": "https://t.me/+nvkoMFktkHE2ZDJl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 15
+    },
+    {
+      "channel_id": null,
+      "label": "𝐁𝐋𝐀𝐂𝐊𝐒𝐈𝐆𝐇𝐓",
+      "title": "𝐁𝐋𝐀𝐂𝐊𝐒𝐈𝐆𝐇𝐓",
+      "invite_link": "https://t.me/+Y70sWaLsQzMzMGJl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 16
+    },
+    {
+      "channel_id": null,
+      "label": "𝐖𝐈𝐓𝐂𝐇𝐄𝐑 𝐒𝐇𝐀𝐃𝐎𝐖",
+      "title": "𝐖𝐈𝐓𝐂𝐇𝐄𝐑 𝐒𝐇𝐀𝐃𝐎𝐖",
+      "invite_link": "https://t.me/+0ab9BGfwHo9iMWY1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 17
+    },
+    {
+      "channel_id": null,
+      "label": "𝐋𝐎𝐑𝐃 𝐌𝐎𝐑𝐏𝐇𝐄𝐔𝐒 ⚡",
+      "title": "𝐋𝐎𝐑𝐃 𝐌𝐎𝐑𝐏𝐇𝐄𝐔𝐒 ⚡",
+      "invite_link": "https://t.me/+55K7KvKCozUxOGM1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 18
+    },
+    {
+      "channel_id": null,
+      "label": "𝗡🇷 𝗖𝗢𝗗𝗘𝗫 𝗕𝗢𝗧𝗦 ⚡",
+      "title": "𝗡🇷 𝗖𝗢𝗗𝗘𝗫 𝗕𝗢𝗧𝗦 ⚡",
+      "invite_link": "https://t.me/+snhqgAJSffJkMjhl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 19
+    },
+    {
+      "channel_id": null,
+      "label": "ℍ𝔼🇮🇸𝔼ℕ🇧𝔼🇷𝔾 🇫🇷",
+      "title": "ℍ𝔼🇮🇸𝔼ℕ🇧𝔼🇷𝔾 🇫🇷",
+      "invite_link": "https://t.me/+MyNJhTIGk6kxZjg1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 20
+    },
+    {
+      "channel_id": null,
+      "label": "「 𓆩•𝐊𝐢𝐬𝐬𝐮 💞•𓆪 」",
+      "title": "「 𓆩•𝐊𝐢𝐬𝐬𝐮 💞•𓆪 」",
+      "invite_link": "https://t.me/+MecqyF_JPTc0YmM1",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 21
+    },
+    {
+      "channel_id": null,
+      "label": "𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗦𝗧𝗔𝗧𝗨𝗦 𝗨𝗣𝗗𝗔𝗧𝗘𝗦 📄",
+      "title": "𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗦𝗧𝗔𝗧𝗨𝗦 𝗨𝗣𝗗𝗔𝗧𝗘𝗦 📄",
+      "invite_link": "https://t.me/+QMi9CO_2ttoyMjJl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 22
+    },
+    {
+      "channel_id": null,
+      "label": "𝙆𝘼𝙍𝙈𝘼 𝙉𝙓𝙏 🧿✨",
+      "title": "𝙆𝘼𝙍𝙈𝘼 𝙉𝙓𝙏 🧿✨",
+      "invite_link": "https://t.me/+ul6AGPa2F89jMzZl",
+      "channel_type": "bonus",
+      "verification_method": "join_request",
+      "is_active": 1,
+      "priority": 23
     }
   ],
   "updates_supergroup_id": -1002376104010,
   "database_channel_id": -1003950233105,
   "welcome_video_channel": "@PIROsx07",
+  "welcome_video_message_ids": [2, 3, 4, 5, 6, 7, 8, 9, 10],
   "credits_per_verified_referral": 3,
   "video_deletion_delay_seconds": 1800,
   "cooldown_between_claims_seconds": 10,

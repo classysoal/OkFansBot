@@ -1,13 +1,14 @@
 import os
 import json
 import logging
+import asyncio
+import random
 from datetime import datetime, timedelta
 import dotenv
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    LinkPreviewOptions
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
     Application,
@@ -48,9 +49,9 @@ DATABASE_CHANNEL_ID = config.get("database_channel_id", -1003950233105)
 UPDATES_SUPERGROUP_ID = config.get("updates_supergroup_id", -1002376104010)
 WELCOME_VIDEO_CHANNEL = config.get("welcome_video_channel", "@PIROsx07")
 
-# Global state dictionary for Admin session states (e.g. uploading videos)
-ADMIN_STATES = {} # admin_id: {"state": "UPLOADING_VIDEO", "vault": "A", "caption": "..."}
-USER_VERIFY_COOLDOWN = {} # user_id: datetime
+# Global state dictionary for Admin session states (e.g. uploading/migrating videos)
+ADMIN_STATES = {}
+USER_VERIFY_COOLDOWN = {}
 
 # --- SYNC CONFIG CHANNELS TO DATABASE ---
 def sync_channels_to_db():
@@ -71,27 +72,13 @@ def sync_channels_to_db():
 # --- MIDDLEWARE & SECURITY CHECKS ---
 
 def is_maintenance() -> bool:
-    # Refresh config on check to support hot-toggles
     c = load_config()
     return c.get("maintenance_mode", False)
 
-async def safe_delete_message(bot, chat_id: int, message_id: int):
-    if not message_id:
-        return
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        logger.debug(f"Failed to delete message {message_id} in chat {chat_id}: {e}")
-
 async def check_user_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Checks if bot is in maintenance or if user is banned.
-    Returns True if user is allowed to proceed, False otherwise.
-    """
     user_id = update.effective_user.id
     user = database.get_user(user_id)
     
-    # 1. Ban check
     if user and user.get("is_banned") == 1:
         msg = "❌ <b>You have been banned from using this bot by the administrator.</b>"
         if update.callback_query:
@@ -100,7 +87,6 @@ async def check_user_access(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.effective_message.reply_html(msg)
         return False
         
-    # 2. Maintenance check (owner bypasses)
     if is_maintenance() and user_id != OWNER_ID:
         msg = "⚠️ <b>OkFansBot is currently undergoing scheduled maintenance.</b>\nPlease check back later!"
         if update.callback_query:
@@ -130,9 +116,6 @@ async def delete_expired_video_job(context: ContextTypes.DEFAULT_TYPE):
         database.mark_video_deleted(delivery_id)
 
 async def recover_deletion_jobs(application: Application):
-    """
-    Scans database for pending video deliveries and schedules them or deletes them immediately if expired.
-    """
     logger.info("Scanning for pending auto-deletions to recover...")
     pending = database.get_pending_deletions()
     now = datetime.utcnow()
@@ -147,7 +130,6 @@ async def recover_deletion_jobs(application: Application):
         expiry_at = datetime.fromisoformat(delivery["expiry_at"])
         
         if expiry_at <= now:
-            # Already expired, delete immediately
             try:
                 await application.bot.delete_message(chat_id=chat_id, message_id=message_id)
             except Exception as e:
@@ -155,7 +137,6 @@ async def recover_deletion_jobs(application: Application):
             database.mark_video_deleted(delivery_id)
             deleted_count += 1
         else:
-            # Schedule future deletion
             delay = (expiry_at - now).total_seconds()
             application.job_queue.run_once(
                 delete_expired_video_job,
@@ -192,8 +173,6 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
 
 def get_welcome_text(user: dict, total_channels: int) -> str:
     username_display = f"@{user['username']}" if user['username'] else user['first_name']
-    
-    # Generate progress indicators
     joined = user['verified_channels_count']
     if joined >= total_channels:
         status_text = "🟢 Verified & Unlocked!"
@@ -265,14 +244,49 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         referrer_name = referrer['first_name'] if referrer else f"User {referred_by}"
         welcome_text = f"👋 <i>You were referred by {referrer_name}!</i>\n\n" + welcome_text
         
-    sent_msg = await update.effective_chat.send_message(
-        welcome_text,
-        reply_markup=get_home_keyboard(),
-        parse_mode="HTML"
-    )
+    # 4. If new user, post notification to supergroup updates channel
+    if is_new:
+        stats = database.get_system_stats()
+        total_users = stats.get("total_users", 0)
+        username_str = f"@{username}" if username else "None"
+        notification_text = (
+            f"➕ <b>New User Notification</b> ➕\n\n"
+            f"👤User: {first_name} [{username_str}]\n\n"
+            f"🆔 User ID : <code>{user_id}</code>\n\n"
+            f"🌝 Total User's Count: {total_users}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=UPDATES_SUPERGROUP_ID,
+                text=notification_text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send new user notification: {e}")
+
+    # 5. Welcoming with a random public intro video from @PIROsx07 (or text fallback)
+    video_ids = config.get("welcome_video_message_ids", [2, 3, 4, 5, 6])
+    chosen_id = random.choice(video_ids)
+    sent_msg = None
+    try:
+        sent_msg = await context.bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=WELCOME_VIDEO_CHANNEL,
+            message_id=chosen_id,
+            caption=welcome_text,
+            parse_mode="HTML",
+            reply_markup=get_home_keyboard()
+        )
+    except Exception as e:
+        logger.warning(f"Could not copy welcome video {chosen_id} from {WELCOME_VIDEO_CHANNEL}: {e}. Falling back to text.")
+        sent_msg = await update.effective_chat.send_message(
+            welcome_text,
+            reply_markup=get_home_keyboard(),
+            parse_mode="HTML"
+        )
     
-    # Save the new menu message ID
-    database.update_last_menu_message(user_id, sent_msg.message_id)
+    if sent_msg:
+        database.update_last_menu_message(user_id, sent_msg.message_id)
 
 # --- CALLBACK QUERY HANDLERS (THE USER UX) ---
 
@@ -286,7 +300,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     data = query.data
     
-    # Load user data
     user = database.get_user(user_id)
     if not user:
         return
@@ -295,33 +308,39 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     total_channels = len(active_channels)
     
     if data == "btn_home":
-        # Return to welcome dashboard
-        await query.edit_message_text(
-            get_welcome_text(user, total_channels),
-            reply_markup=get_home_keyboard(),
-            parse_mode="HTML"
-        )
+        # Edit welcome dashboard
+        try:
+            await query.edit_message_text(
+                get_welcome_text(user, total_channels),
+                reply_markup=get_home_keyboard(),
+                parse_mode="HTML"
+            )
+        except Exception:
+            # Fallback if query message was media (cannot edit text of video to plain text welcome)
+            await safe_delete_message(context.bot, user_id, query.message.message_id)
+            sent_msg = await context.bot.send_message(
+                chat_id=user_id,
+                text=get_welcome_text(user, total_channels),
+                reply_markup=get_home_keyboard(),
+                parse_mode="HTML"
+            )
+            database.update_last_menu_message(user_id, sent_msg.message_id)
         
     elif data == "btn_profile":
-        # Profile View
-        # Get inviter name
         referred_by_name = "None"
         if user["referred_by"]:
             inviter = database.get_user(user["referred_by"])
             referred_by_name = inviter["first_name"] if inviter else f"ID {user['referred_by']}"
             
-        # Count total videos watched
         db_conn = database.get_db_connection()
         cursor = db_conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM video_deliveries WHERE user_id = ?", (user_id,))
-        videos_watched = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) as count FROM video_deliveries WHERE user_id = %s", (user_id,))
+        videos_watched = cursor.fetchone()['count']
         
-        # Count verified referrals
-        cursor.execute("SELECT COUNT(*) FROM referrals WHERE inviter_user_id = ? AND status = 'verified'", (user_id,))
-        referral_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) as count FROM referrals WHERE inviter_user_id = %s AND status = 'verified'", (user_id,))
+        referral_count = cursor.fetchone()['count']
         db_conn.close()
         
-        # Map vault index to name
         vaults = ["Vault A (Starter)", "Vault B (Join Rewards)", "Vault C (Referrals)", "Vault D (Premium)", "Vault E (Special)"]
         vault_name = vaults[user["vault_pointer"] % len(vaults)]
         
@@ -341,14 +360,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             f"🔗 <b>Your Referral Link:</b>\n"
             f"<code>https://t.me/OkFansBot?start=ref_{user_id}</code>"
         )
-        await query.edit_message_text(
-            profile_text,
-            reply_markup=get_back_keyboard(),
-            parse_mode="HTML"
-        )
+        try:
+            await query.edit_message_text(
+                profile_text,
+                reply_markup=get_back_keyboard(),
+                parse_mode="HTML"
+            )
+        except Exception:
+            await safe_delete_message(context.bot, user_id, query.message.message_id)
+            sent_msg = await context.bot.send_message(
+                chat_id=user_id,
+                text=profile_text,
+                reply_markup=get_back_keyboard(),
+                parse_mode="HTML"
+            )
+            database.update_last_menu_message(user_id, sent_msg.message_id)
         
     elif data == "btn_invite":
-        # Invite Friend View
         invite_text = (
             f"🤝 <b>REFERRAL PROGRAM</b>\n\n"
             f"Invite your friends and earn premium video credits!\n\n"
@@ -358,14 +386,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             f"<code>https://t.me/OkFansBot?start=ref_{user_id}</code>\n\n"
             f"<i>Share this link with friends to start earning!</i>"
         )
-        await query.edit_message_text(
-            invite_text,
-            reply_markup=get_back_keyboard(),
-            parse_mode="HTML"
-        )
+        try:
+            await query.edit_message_text(
+                invite_text,
+                reply_markup=get_back_keyboard(),
+                parse_mode="HTML"
+            )
+        except Exception:
+            await safe_delete_message(context.bot, user_id, query.message.message_id)
+            sent_msg = await context.bot.send_message(
+                chat_id=user_id,
+                text=invite_text,
+                reply_markup=get_back_keyboard(),
+                parse_mode="HTML"
+            )
+            database.update_last_menu_message(user_id, sent_msg.message_id)
         
     elif data == "btn_rules":
-        # Rules View
         rules_text = (
             f"📜 <b>RULES & INSTRUCTIONS</b>\n\n"
             f"1. <b>No Fake Channel Farming</b>: You must remain in the required channels to keep your unlocked status. Leaving channels will lock video delivery.\n"
@@ -373,15 +410,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             f"3. <b>Message Expiration</b>: All reward videos are sent with copy protection and are automatically deleted after 30 minutes. Make sure to watch them promptly!\n"
             f"4. <b>Idempotency</b>: Joins and referrals are counted once. Re-joining a channel or re-inviting the same user does not grant double credits."
         )
-        await query.edit_message_text(
-            rules_text,
-            reply_markup=get_back_keyboard(),
-            parse_mode="HTML"
-        )
+        try:
+            await query.edit_message_text(
+                rules_text,
+                reply_markup=get_back_keyboard(),
+                parse_mode="HTML"
+            )
+        except Exception:
+            await safe_delete_message(context.bot, user_id, query.message.message_id)
+            sent_msg = await context.bot.send_message(
+                chat_id=user_id,
+                text=rules_text,
+                reply_markup=get_back_keyboard(),
+                parse_mode="HTML"
+            )
+            database.update_last_menu_message(user_id, sent_msg.message_id)
         
     elif data == "btn_verify":
-        # Verify Action
-        # Rate limit check (Verify Spam Protection)
         now = datetime.utcnow()
         last_click = USER_VERIFY_COOLDOWN.get(user_id)
         if last_click and (now - last_click).total_seconds() < 10:
@@ -390,58 +435,49 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             
         USER_VERIFY_COOLDOWN[user_id] = now
         
-        # Verify joins
         missing = []
         verified_this_session = 0
         
         for ch in active_channels:
-            # Perform check
             is_member = False
-            # If join_request check DB
-            if ch["verification_method"] == "join_request":
-                evt = database.get_join_event(user_id, ch["channel_id"])
-                if evt and evt["status"] == "requested":
-                    is_member = True
+            db_id = ch["id"]
+            cid = ch["channel_id"]
             
-            # If still not verified, verify via API get_chat_member
-            if not is_member:
+            # Check DB join requests
+            evt = database.get_join_event(user_id, db_id)
+            if evt and evt["status"] == "requested":
+                is_member = True
+            
+            # If still not verified, verify via API if we have the channel ID
+            if not is_member and cid:
                 try:
-                    member = await context.bot.get_chat_member(chat_id=ch["channel_id"], user_id=user_id)
+                    member = await context.bot.get_chat_member(chat_id=cid, user_id=user_id)
                     if member.status in ["creator", "administrator", "member"]:
                         is_member = True
-                        # Update join status in DB as joined
-                        database.record_join_event(user_id, ch["channel_id"], "joined")
+                        database.record_join_event(user_id, db_id, "joined")
                 except Exception as e:
-                    logger.debug(f"API membership check failed for user {user_id} in {ch['channel_id']}: {e}")
+                    logger.debug(f"API membership check failed for user {user_id} in {cid}: {e}")
                     
             if is_member:
-                # Mark as verified in database
-                did_verify = database.verify_join(user_id, ch["channel_id"])
+                did_verify = database.verify_join(user_id, db_id)
                 if did_verify:
                     verified_this_session += 1
             else:
                 missing.append(ch)
 
-        # Refresh user data
         user = database.get_user(user_id)
         
         if len(missing) == 0:
-            # All channels verified!
-            # Did they verify new ones this time?
             reward_msg = ""
             if verified_this_session > 0:
-                # Milestone check
-                # User completed starter gate: grant 1 initial credit
                 database.add_credits(user_id, 1, "starter_bonus")
                 reward_msg = "\n\n🎉 <b>All channels verified! Initial 1 credit granted.</b>"
                 
-                # Check if referred by someone and process referral crediting
                 inviter_id, inviter_credits = database.add_referral_credits_if_eligible(
                     referred_user_id=user_id,
                     referral_credits=config.get("credits_per_verified_referral", 3)
                 )
                 if inviter_id:
-                    # Notify referrer!
                     try:
                         ref_msg = (
                             f"👥 <b>Referral Verified!</b>\n\n"
@@ -457,46 +493,72 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     except Exception as e:
                         logger.warning(f"Could not notify inviter {inviter_id}: {e}")
 
-            # Refresh user again for display
             user = database.get_user(user_id)
-            await query.edit_message_text(
+            success_text = (
                 f"✅ <b>All required channels verified successfully!</b>{reward_msg}\n\n"
                 f"• Available Credits: <b>{user['credits']} 🪙</b>\n"
                 f"• Verified Joins: <b>{user['verified_channels_count']}/{total_channels}</b>\n\n"
-                f"Tap <b>Get Video</b> to watch your rewards!",
-                reply_markup=get_back_keyboard(),
-                parse_mode="HTML"
+                f"Tap <b>Get Video</b> to watch your rewards!"
             )
+            try:
+                await query.edit_message_text(
+                    success_text,
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await safe_delete_message(context.bot, user_id, query.message.message_id)
+                sent_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=success_text,
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+                database.update_last_menu_message(user_id, sent_msg.message_id)
         else:
-            # Missing channels, show inline links to join
             kb = []
             for m in missing:
                 kb.append([InlineKeyboardButton(f"🔗 Join {m['label']}", url=m["invite_link"])])
             kb.append([InlineKeyboardButton("🔄 Re-Verify Joins", callback_data="btn_verify")])
             kb.append([InlineKeyboardButton("🔙 Back to Home", callback_data="btn_home")])
             
-            await query.edit_message_text(
+            fail_text = (
                 f"⚠️ <b>Verification Failed!</b>\n\n"
                 f"You must join all required channels to verify your access. Please join the channels listed below and click Verify:\n\n"
-                f"<i>(Note: For request-to-join links, simply click 'Request to Join' and we will verify the request status)</i>",
-                reply_markup=InlineKeyboardMarkup(kb),
-                parse_mode="HTML"
+                f"<i>(Note: For request-to-join links, simply click 'Request to Join' and we will verify the request status)</i>"
             )
+            try:
+                await query.edit_message_text(
+                    fail_text,
+                    reply_markup=InlineKeyboardMarkup(kb),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await safe_delete_message(context.bot, user_id, query.message.message_id)
+                sent_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=fail_text,
+                    reply_markup=InlineKeyboardMarkup(kb),
+                    parse_mode="HTML"
+                )
+                database.update_last_menu_message(user_id, sent_msg.message_id)
 
     elif data == "btn_get_video":
         # Get Video Action
-        # First check verification
         unverified_channels = []
         for ch in active_channels:
             is_member = False
+            db_id = ch["id"]
+            cid = ch["channel_id"]
+            
             if ch["verification_method"] == "join_request":
-                evt = database.get_join_event(user_id, ch["channel_id"])
+                evt = database.get_join_event(user_id, db_id)
                 if evt and evt["status"] == "requested":
                     is_member = True
             
-            if not is_member:
+            if not is_member and cid:
                 try:
-                    member = await context.bot.get_chat_member(chat_id=ch["channel_id"], user_id=user_id)
+                    member = await context.bot.get_chat_member(chat_id=cid, user_id=user_id)
                     if member.status in ["creator", "administrator", "member"]:
                         is_member = True
                 except:
@@ -505,39 +567,63 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 unverified_channels.append(ch)
 
         if len(unverified_channels) > 0:
-            await query.edit_message_text(
+            access_denied_text = (
                 "❌ <b>Access Denied!</b>\n\n"
-                "You must verify your membership in all required channels before requesting reward videos.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ Start Verification", callback_data="btn_verify")
-                ], [
-                    InlineKeyboardButton("🔙 Back to Home", callback_data="btn_home")
-                ]]),
-                parse_mode="HTML"
+                "You must verify your membership in all required channels before requesting reward videos."
             )
+            denied_kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Start Verification", callback_data="btn_verify")
+            ], [
+                InlineKeyboardButton("🔙 Back to Home", callback_data="btn_home")
+            ]])
+            try:
+                await query.edit_message_text(
+                    access_denied_text,
+                    reply_markup=denied_kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await safe_delete_message(context.bot, user_id, query.message.message_id)
+                sent_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=access_denied_text,
+                    reply_markup=denied_kb,
+                    parse_mode="HTML"
+                )
+                database.update_last_menu_message(user_id, sent_msg.message_id)
             return
 
-        # Check credits
         if user["credits"] < 1:
-            await query.edit_message_text(
+            insufficient_text = (
                 "❌ <b>Insufficient Credits!</b>\n\n"
                 "You do not have enough credits to redeem a video.\n\n"
                 "💡 <i>How to get credits:</i>\n"
                 "• Complete your initial channel verification (+1 credit)\n"
-                "• Invite friends using your referral link (+3 credits per verified referral)",
-                reply_markup=get_back_keyboard(),
-                parse_mode="HTML"
+                "• Invite friends using your referral link (+3 credits per verified referral)"
             )
+            try:
+                await query.edit_message_text(
+                    insufficient_text,
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await safe_delete_message(context.bot, user_id, query.message.message_id)
+                sent_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=insufficient_text,
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+                database.update_last_menu_message(user_id, sent_msg.message_id)
             return
 
         # Cooldown check
-        # We can implement cooldown per user to prevent rapid button double-clicks
-        # Fetch last delivery
         db_conn = database.get_db_connection()
         cursor = db_conn.cursor()
         cursor.execute("""
             SELECT sent_at FROM video_deliveries 
-            WHERE user_id = ? 
+            WHERE user_id = %s 
             ORDER BY sent_at DESC LIMIT 1
         """, (user_id,))
         last_del = cursor.fetchone()
@@ -551,40 +637,45 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.answer(f"⏳ Cooldown: Please wait {int(cooldown - elapsed)}s before claiming another video.", show_alert=True)
                 return
 
-        # Choose vault depending on milestones or just loop
-        # The user has Vaults A, B, C, D, E
-        # Map pointer to vaults
         vault_mapping = ["A", "B", "C", "D", "E"]
         active_vault = vault_mapping[user["vault_pointer"] % len(vault_mapping)]
 
-        # Try to get next video in that vault
         video = database.get_next_reward_video(user_id, active_vault)
         if not video:
-            # Fallback: find any active video in Vault B
             video = database.get_next_reward_video(user_id, "B")
             
         if not video:
-            await query.edit_message_text(
+            empty_vault_text = (
                 "⚠️ <b>Video Vault Empty!</b>\n\n"
-                "There are currently no videos uploaded in the reward library. Please notify the administrator.",
-                reply_markup=get_back_keyboard(),
-                parse_mode="HTML"
+                "There are currently no videos uploaded in the reward library. Please notify the administrator."
             )
+            try:
+                await query.edit_message_text(
+                    empty_vault_text,
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await safe_delete_message(context.bot, user_id, query.message.message_id)
+                sent_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=empty_vault_text,
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+                database.update_last_menu_message(user_id, sent_msg.message_id)
             return
 
-        # Deduct 1 credit from user
         deducted = database.add_credits(user_id, -1, "video_spend")
         if not deducted:
             await query.answer("Transaction failed. Try again.", show_alert=True)
             return
 
-        # Send protected video
         try:
             caption = video["caption"] if video["caption"] else ""
             expiry_delay = config.get("video_deletion_delay_seconds", 1800)
             expiry_time = datetime.utcnow() + timedelta(seconds=expiry_delay)
             
-            # Format expiry notice
             expiry_text = f"🔥 <i>This video will auto-delete in {int(expiry_delay/60)} minutes. Forwarding/saving is blocked.</i>"
             full_caption = f"{caption}\n\n{expiry_text}" if caption else expiry_text
 
@@ -596,7 +687,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 protect_content=True
             )
             
-            # Record delivery
             delivery_id = database.record_video_delivery(
                 user_id=user_id,
                 video_id=video["video_id"],
@@ -605,7 +695,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 expiry_at=expiry_time
             )
             
-            # Schedule JobQueue auto-deletion
             context.application.job_queue.run_once(
                 delete_expired_video_job,
                 when=expiry_delay,
@@ -613,13 +702,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 data={"message_id": sent_msg.message_id, "delivery_id": delivery_id}
             )
 
-            # Delete the previous menu message now that the video was successfully sent
             await safe_delete_message(context.bot, user_id, query.message.message_id)
             
-            # Fetch updated user data (after deduction)
             updated_user = database.get_user(user_id)
-            
-            # Send new menu message below the video
             new_menu_text = (
                 f"🚀 <b>Video Sent! Check it above.</b>\n\n"
                 f"{get_welcome_text(updated_user, total_channels)}"
@@ -630,48 +715,46 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=get_home_keyboard(),
                 parse_mode="HTML"
             )
-            
-            # Save the new menu message ID
             database.update_last_menu_message(user_id, new_msg.message_id)
         except Exception as e:
             logger.error(f"Error sending video {video['video_id']} to user {user_id}: {e}")
-            # Refund credit
             database.add_credits(user_id, 1, "admin_adjust")
-            await query.edit_message_text(
-                "❌ <b>Error Sending Video!</b>\n\n"
-                "We encountered a Telegram API error while trying to send the video. Your 1 credit has been refunded.",
-                reply_markup=get_back_keyboard(),
-                parse_mode="HTML"
-            )
+            try:
+                await query.edit_message_text(
+                    "❌ <b>Error Sending Video!</b>\n\n"
+                    "We encountered a Telegram API error while trying to send the video. Your 1 credit has been refunded.",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                sent_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text="❌ <b>Error Sending Video!</b>\n\nWe encountered a Telegram API error while trying to send the video. Your 1 credit has been refunded.",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="HTML"
+                )
+                database.update_last_menu_message(user_id, sent_msg.message_id)
 
 # --- CHAT JOIN REQUEST LISTENER ---
 
 async def handle_chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Triggers when a user clicks a request-to-join link in a private channel.
-    Allows the bot to log request status to verify gate constraints.
-    """
     request = update.chat_join_request
     user_id = request.from_user.id
     channel_id = request.chat.id
+    invite_link_obj = request.invite_link
     
-    logger.info(f"Join request received from user {user_id} for channel {channel_id}")
-    
-    # Verify if channel is in our configuration gate
-    channels = database.get_required_channels(only_active=False)
-    target_channel = next((c for c in channels if c["channel_id"] == channel_id), None)
-    
-    if target_channel:
-        # Save join request to database as 'requested' and log as verified request
-        database.record_join_event(user_id, channel_id, "requested")
-        logger.info(f"Logged pending join request for user {user_id} in required channel {channel_id}")
+    if not invite_link_obj:
+        return
         
-        # Optionally, notify the supergroup or admin
-        try:
-            log_text = f"🔔 <b>New Join Request:</b>\nUser: <code>{user_id}</code>\nChannel: <code>{channel_id}</code> ({target_channel['label']})"
-            await context.bot.send_message(chat_id=UPDATES_SUPERGROUP_ID, text=log_text, parse_mode="HTML")
-        except Exception as e:
-            logger.warning(f"Could not send updates notification: {e}")
+    invite_link = invite_link_obj.invite_link
+    logger.info(f"Join request received from user {user_id} for channel {channel_id} via {invite_link}")
+    
+    # Dynamically resolve and sync Telegram channel ID into DB
+    db_id = database.resolve_channel_id_by_invite(invite_link, channel_id)
+    
+    if db_id:
+        database.record_join_event(user_id, db_id, "requested")
+        logger.info(f"Dynamically mapped and logged request for user {user_id} in channel DB ID {db_id}")
 
 # --- ADMIN PANEL COMMAND HANDLERS ---
 
@@ -685,12 +768,10 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await delete_incoming_cmd(update)
     admin_id = update.effective_user.id
     if admin_id != OWNER_ID:
-        # Ignore unauthorized calls
         return
         
     stats = database.get_system_stats()
     
-    # Format vault stats list
     vault_stats = ""
     for vault, count in stats.get("vault_counts", {}).items():
         vault_stats += f"• Vault {vault}: <b>{count} videos</b>\n"
@@ -712,6 +793,7 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• <code>/ban [user_id]</code> - Ban user\n"
         f"• <code>/unban [user_id]</code> - Unban user\n"
         f"• <code>/maintenance</code> - Toggle maintenance mode\n"
+        f"• <code>/migrate [from_channel] [start_msg] [end_msg] [vault]</code> - Bulk migrate\n"
         f"• <code>/cancel</code> - Exit active admin states"
     )
     
@@ -731,7 +813,6 @@ async def admin_add_video_command(update: Update, context: ContextTypes.DEFAULT_
     vault = args[0].upper()
     caption = " ".join(args[1:]) if len(args) > 1 else None
     
-    # Store state
     ADMIN_STATES[admin_id] = {
         "state": "UPLOADING_VIDEO",
         "vault": vault,
@@ -785,7 +866,6 @@ async def admin_give_credits_command(update: Update, context: ContextTypes.DEFAU
     if success:
         database.log_admin_action(admin_id, "give_credits", f"Credits: {amount} to user {user_id}")
         await update.effective_message.reply_html(f"✅ Successfully credited <b>{amount} credits</b> to user <code>{user_id}</code>.")
-        # Notify user
         try:
             await context.bot.send_message(
                 chat_id=user_id,
@@ -861,6 +941,87 @@ async def admin_toggle_maintenance(update: Update, context: ContextTypes.DEFAULT
     state_display = "ENABLED (Users blocked)" if new_state else "DISABLED (Users allowed)"
     await update.effective_message.reply_html(f"🛠️ <b>Maintenance Mode:</b> {state_display}")
 
+async def admin_migrate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Syntax: /migrate [from_channel_id] [start_msg_id] [end_msg_id] [vault]
+    Admin migration tool to scrape, copy and database-index videos.
+    """
+    await delete_incoming_cmd(update)
+    admin_id = update.effective_user.id
+    if admin_id != OWNER_ID:
+        return
+        
+    args = context.args
+    if len(args) < 4:
+        await update.effective_message.reply_text("Usage: /migrate [from_channel_id] [start_msg_id] [end_msg_id] [vault_name: A/B/C/D/E]")
+        return
+        
+    try:
+        from_channel = int(args[0])
+        start_id = int(args[1])
+        end_id = int(args[2])
+        vault = args[3].upper()
+    except ValueError:
+        await update.effective_message.reply_text("Invalid arguments. Ensure channel and message IDs are integers.")
+        return
+        
+    if vault not in ["A", "B", "C", "D", "E"]:
+        await update.effective_message.reply_text("Invalid vault name. Choose A/B/C/D/E.")
+        return
+        
+    status_msg = await update.effective_chat.send_message(
+        f"⏳ <b>Migration Started...</b>\n"
+        f"Copying and indexing messages from <code>{from_channel}</code> (IDs {start_id} to {end_id}) into <b>Vault {vault}</b>.\n"
+        f"This runs in the background. Progress updates will be sent here."
+    )
+    
+    # Run the migration asynchronously in the background Event Loop
+    async def run_migration_task():
+        success_count = 0
+        total_processed = 0
+        
+        for msg_id in range(start_id, end_id + 1):
+            try:
+                # Copy message from original channel to database channel
+                copied = await context.bot.copy_message(
+                    chat_id=DATABASE_CHANNEL_ID,
+                    from_chat_id=from_channel,
+                    message_id=msg_id
+                )
+                
+                # Check if the copied message contains a video
+                if copied.video:
+                    file_id = copied.video.file_id
+                    caption = copied.caption
+                    # Index in database
+                    added = database.add_video(file_id, caption, vault)
+                    if added:
+                        success_count += 1
+                
+                total_processed += 1
+                # Periodically update status (every 25 messages)
+                if total_processed % 25 == 0:
+                    await status_msg.edit_text(
+                        f"⏳ <b>Migration Progress...</b>\n"
+                        f"Processed: {total_processed}/{end_id - start_id + 1} messages.\n"
+                        f"Videos successfully copied & indexed: <b>{success_count}</b>"
+                    )
+                    
+                # Small sleep to prevent Telegram rate limit flooding
+                await asyncio.sleep(1.2)
+            except Exception as e:
+                # Message doesn't exist, is deleted, or not a video - skip silently
+                continue
+                
+        await status_msg.edit_text(
+            f"🎉 <b>Migration Completed!</b>\n\n"
+            f"• Total processed: {end_id - start_id + 1} messages.\n"
+            f"• Reward videos copied & indexed: <b>{success_count}</b> into <b>Vault {vault}</b>."
+        )
+        database.log_admin_action(OWNER_ID, "migrate", f"Migrated {success_count} videos from {from_channel}")
+
+    asyncio.create_task(run_migration_task())
+
 # --- TEXT / MEDIA MESSAGE HANDLER (FOR VIDEO UPLOADS) ---
 
 async def handle_incoming_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -870,19 +1031,16 @@ async def handle_incoming_messages(update: Update, context: ContextTypes.DEFAULT
     if user_id == OWNER_ID and user_id in ADMIN_STATES:
         state = ADMIN_STATES[user_id]
         if state["state"] == "UPLOADING_VIDEO":
-            # Check if message contains video
             if update.effective_message.video:
                 video = update.effective_message.video
                 file_id = video.file_id
                 
-                # Check for custom caption or fallback to update caption
                 caption = state["caption"]
                 if not caption and update.effective_message.caption:
                     caption = update.effective_message.caption
                     
                 vault = state["vault"]
                 
-                # Save to database
                 success = database.add_video(file_id, caption, vault)
                 if success:
                     await update.effective_message.reply_text(
@@ -903,12 +1061,10 @@ async def handle_incoming_messages(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.debug(f"Failed to delete incoming user message: {e}")
 
-    # Remove old menu and print a fresh new one
     old_menu_id = database.get_last_menu_message(user_id)
     if old_menu_id:
         await safe_delete_message(context.bot, user_id, old_menu_id)
 
-    # Sync and get channels count
     active_channels = database.get_required_channels()
     total_channels = len(active_channels)
     user = database.get_user(user_id)
@@ -925,11 +1081,8 @@ async def handle_incoming_messages(update: Update, context: ContextTypes.DEFAULT
 # --- STARTUP SYNC & SETUP ---
 
 async def on_startup(application: Application):
-    # Initialize DB files
     database.init_db()
-    # Sync config channels to database
     sync_channels_to_db()
-    # Recover jobs
     await recover_deletion_jobs(application)
 
 # --- MAIN EXECUTION ---
@@ -957,19 +1110,15 @@ def main():
         print("CRITICAL ERROR: Telegram Bot Token (TG_BOT_TOKEN) is not configured in .env!")
         return
 
-    # Start dummy HTTP server in a background thread to satisfy Render Free Tier Web Service checks
     import threading
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    # Create Bot Application
     application = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
 
-    # Handlers Registration
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(ChatJoinRequestHandler(handle_chat_join_request))
     
-    # Admin Command Handlers
     application.add_handler(CommandHandler("admin", admin_panel_command))
     application.add_handler(CommandHandler("addvideo", admin_add_video_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
@@ -977,11 +1126,10 @@ def main():
     application.add_handler(CommandHandler("ban", admin_ban_command))
     application.add_handler(CommandHandler("unban", admin_unban_command))
     application.add_handler(CommandHandler("maintenance", admin_toggle_maintenance))
+    application.add_handler(CommandHandler("migrate", admin_migrate_command))
 
-    # Fallback Message Handler (Text & Media Messages)
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_incoming_messages))
 
-    # Run Application
     print("OkFansBot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
