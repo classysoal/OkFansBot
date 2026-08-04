@@ -1,0 +1,19 @@
+# Local Environment Secrets
+.env
+
+# SQLite Database Files
+*.db
+*.db-journal
+*.db-wal
+
+# Python compiled cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and System Files
+.gemini/
+.vscode/
+.idea/
+.DS_Store

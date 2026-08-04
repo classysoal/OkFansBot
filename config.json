@@ -1,0 +1,23 @@
+{
+  "owner_id": 6193742824,
+  "required_channels": [
+    {
+      "channel_id": -1003585477205,
+      "label": "Required Channel 1",
+      "title": "OkFans Required Channel",
+      "invite_link": "https://t.me/OkFansRequiredChannel",
+      "channel_type": "starter",
+      "verification_method": "direct_join",
+      "is_active": 1,
+      "priority": 1
+    }
+  ],
+  "updates_supergroup_id": -1002376104010,
+  "database_channel_id": -1003950233105,
+  "welcome_video_channel": "@PIROsx07",
+  "credits_per_verified_referral": 3,
+  "video_deletion_delay_seconds": 1800,
+  "cooldown_between_claims_seconds": 10,
+  "max_videos_per_day": 10,
+  "maintenance_mode": false
+}
