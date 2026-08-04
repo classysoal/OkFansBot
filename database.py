@@ -6,7 +6,7 @@ from datetime import datetime
 DB_FILE = "okfans_bot.db"
 
 # Detect database configuration
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL").strip() if os.getenv("DATABASE_URL") else None
 IS_POSTGRES = bool(DATABASE_URL)
 
 # --- DATABASE WRAPPERS FOR SQLITE COMPATIBILITY ---
