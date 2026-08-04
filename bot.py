@@ -934,10 +934,32 @@ async def on_startup(application: Application):
 
 # --- MAIN EXECUTION ---
 
+def run_dummy_web_server():
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
+    
+    port = int(os.getenv("PORT", 8080))
+    class DummyHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OkFansBot is running.")
+            
+    try:
+        server = HTTPServer(("0.0.0.0", port), DummyHandler)
+        logger.info(f"Dummy HTTP server listening on port {port} for Render Free Web Service...")
+        server.serve_forever()
+    except Exception as e:
+        logger.warning(f"Failed to start dummy HTTP server: {e}")
+
 def main():
     if not BOT_TOKEN or "YOUR_TELEGRAM_BOT_TOKEN" in BOT_TOKEN:
         print("CRITICAL ERROR: Telegram Bot Token (TG_BOT_TOKEN) is not configured in .env!")
         return
+
+    # Start dummy HTTP server in a background thread to satisfy Render Free Tier Web Service checks
+    import threading
+    threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     # Create Bot Application
     application = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
