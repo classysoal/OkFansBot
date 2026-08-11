@@ -331,6 +331,168 @@ def claim_daily_reward(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not claim daily bonus.")
     return res
 
+@app.post("/api/rewards/redeem")
+async def redeem_video_bundle(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    vip_info = database.get_user_vip_tier_info(user_id)
+    required_cost = vip_info["credit_cost"]
+    bundle_size = vip_info["bundle_size"]
+    
+    if current_user.get("credits", 0) < required_cost:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"Insufficient balance! 1 Credit required, but you have {current_user.get('credits', 0)} Credits. Invite a friend to earn credits!"
+        )
+
+    # Deduct 1 Credit atomically
+    deducted = database.deduct_credits(user_id, required_cost, "video_spend")
+    if not deducted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not deduct credits from account.")
+
+    # Get unseen videos for bundle
+    vault_mapping = ["A", "B", "C", "D", "E"]
+    user_vault_ptr = current_user.get("vault_pointer") or 0
+    unlocked_limit = config.get("unlocked_video_limit", 50)
+    
+    delivered_videos = []
+    for item_idx in range(bundle_size):
+        active_vault = vault_mapping[(user_vault_ptr + item_idx) % len(vault_mapping)]
+        video = VideoCatalog.get_next_video(user_id, active_vault, max_limit=unlocked_limit)
+        if not video:
+            video = VideoCatalog.get_next_video(user_id, "B", max_limit=unlocked_limit)
+        if not video:
+            break
+        delivered_videos.append(video)
+
+    if not delivered_videos:
+        database.add_credits(user_id, required_cost, "refund_no_videos")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No new unseen videos available right now. Your credit was refunded.")
+
+    import httpx
+    expiry_delay = int(config.get("video_deletion_delay_seconds", 1800))
+    del_minutes = max(1, expiry_delay // 60)
+    
+    delivered_count = 0
+    async with httpx.AsyncClient() as client:
+        for idx, video in enumerate(delivered_videos):
+            caption_text = (
+                f"🎁 <b>{vip_info['badge']} VIP Reward Item ({idx + 1}/{len(delivered_videos)})</b>\n\n"
+                f"{video['caption'] or ''}\n\n"
+                f"⏱️ <i>This item will automatically delete in {del_minutes} minutes. Save it now!</i>"
+            )
+            try:
+                res = await client.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo",
+                    json={
+                        "chat_id": user_id,
+                        "video": video["file_id"],
+                        "caption": caption_text,
+                        "parse_mode": "HTML",
+                        "protect_content": True,
+                        "has_spoiler": True
+                    },
+                    timeout=10.0
+                )
+                if res.status_code == 200:
+                    delivered_count += 1
+                    database.record_video_delivery(user_id, video["video_id"], user_id, res.json().get("result", {}).get("message_id", 0), expiry_delay)
+            except Exception as e:
+                logger.error(f"Error delivering video {video['video_id']} via API to user {user_id}: {e}")
+
+    database.save_last_bundle(user_id, [v["video_id"] for v in delivered_videos])
+    database.increment_claimed_count(user_id)
+    
+    updated_user = database.get_user(user_id)
+    return {
+        "success": True,
+        "bundle_size": delivered_count,
+        "new_credits": updated_user.get("credits", 0) if updated_user else 0,
+        "message": f"🎉 {delivered_count} VIP Reward Videos delivered directly to your Telegram chat!"
+    }
+
+@app.post("/api/verification/check")
+async def run_verification_check(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    active_channels = database.get_required_channels()
+    
+    import httpx
+    claimed_count = database.get_user_claimed_videos_count(user_id)
+    batch_size = config.get("channels_per_verification_batch", 5)
+    total_channels = len(active_channels)
+    req_count = min(total_channels, (claimed_count + 1) * batch_size) if not current_user.get("starter_completed", 0) else total_channels
+    required_channels = active_channels[:req_count]
+    
+    passed_count = 0
+    channel_results = []
+    
+    async with httpx.AsyncClient() as client:
+        for ch in required_channels:
+            db_id = ch["id"]
+            cid = ch["channel_id"]
+            label = ch["label"]
+            v_method = ch.get("verification_method", "direct_join")
+            
+            is_passed = False
+            reason = "Not joined"
+            
+            evt = database.get_join_event(user_id, db_id)
+            if evt and (evt.get("verified") == 1 or evt.get("status") in ["requested", "joined", "approved"]):
+                is_passed = True
+                reason = "Verified via join event"
+                
+            if cid:
+                try:
+                    res = await client.get(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
+                        params={"chat_id": cid, "user_id": user_id},
+                        timeout=5.0
+                    )
+                    if res.status_code == 200 and res.json().get("ok"):
+                        st = res.json().get("result", {}).get("status")
+                        if st in ["creator", "administrator", "member", "restricted"]:
+                            is_passed = True
+                            reason = f"Verified via Telegram API (status: {st})"
+                            database.record_join_event(user_id, db_id, "joined")
+                        elif st in ["left", "kicked"]:
+                            if evt and evt.get("status") in ["requested", "approved"]:
+                                is_passed = True
+                            else:
+                                is_passed = False
+                                reason = f"User left channel ({st})"
+                except Exception as e:
+                    logger.debug(f"API check error for ch {cid}: {e}")
+            else:
+                if v_method == "request_join" or (evt and evt.get("status") == "requested"):
+                    is_passed = True
+                    reason = "Request to join channel verified"
+
+            if is_passed:
+                database.verify_join(user_id, db_id)
+                passed_count += 1
+                
+            channel_results.append({
+                "id": db_id,
+                "title": ch["title"],
+                "passed": is_passed,
+                "status": "COMPLETED" if is_passed else ("PENDING" if (evt and evt.get("status") == "requested") else "ACTION_REQUIRED")
+            })
+
+    all_passed = (passed_count == len(required_channels))
+    if all_passed and not current_user.get("starter_completed", 0):
+        database.mark_starter_completed(user_id)
+        database.add_credits(user_id, 1, "starter_completion_bonus")
+        
+    updated_user = database.get_user(user_id)
+    return {
+        "success": True,
+        "passed_count": passed_count,
+        "total_required": len(required_channels),
+        "all_passed": all_passed,
+        "channels": channel_results,
+        "new_credits": updated_user.get("credits", 0) if updated_user else 0,
+        "message": "🎉 All required channel steps completed! Starter bonus unlocked!" if all_passed else f"Verified {passed_count}/{len(required_channels)} channels. Please complete remaining steps!"
+    }
+
 # --- ADMIN CONTROL PANEL ENDPOINTS ---
 
 @app.get("/api/admin/stats")

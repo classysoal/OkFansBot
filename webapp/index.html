@@ -48,7 +48,7 @@
 
         <!-- Quick Action Cards Grid -->
         <div class="action-grid">
-          <button class="action-card primary-card" onclick="switchTab('view-rewards')">
+          <button id="btnClaimBundle" class="action-card primary-card" onclick="redeemBundle()">
             <span class="action-icon">🎁</span>
             <div class="action-meta">
               <span class="action-title">Claim Video Bundle</span>
@@ -111,7 +111,7 @@
             <div class="skeleton-card"></div>
             <div class="skeleton-card"></div>
           </div>
-          <button class="btn-primary" style="margin-top: 14px;" onclick="loadDashboardData(true)">🔄 Re-Check Verification</button>
+          <button id="btnCheckVerif" class="btn-primary" style="margin-top: 14px;" onclick="checkVerification()">🔄 Re-Check Verification</button>
         </div>
       </section>
 

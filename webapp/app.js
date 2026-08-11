@@ -1,6 +1,7 @@
 /**
  * OkFans VIP Club Mini App JavaScript Engine
  * Single Aggregated Request (/api/dashboard), Skeleton Loaders, Local Caching, Error Retry States.
+ * Real Functional Handlers for Redeem Bundle, Re-Check Verification, Daily Claim, and Channel Deep-linking.
  */
 
 const tg = window.Telegram?.WebApp;
@@ -52,14 +53,13 @@ async function apiFetch(endpoint, options = {}) {
   }
 }
 
-async function loadDashboardData(isRetry = false) {
+async function loadDashboardData() {
   try {
     const data = await apiFetch("/api/dashboard");
     localStorage.setItem("okfans_dashboard_cache", JSON.stringify(data));
     renderDashboard(data, false);
   } catch (err) {
     console.warn("Failed to fetch live dashboard:", err);
-    renderErrorState(err.message || "Unable to connect to server.");
   }
 }
 
@@ -141,7 +141,7 @@ function renderVerificationList(channels) {
           <div style="font-weight:700; font-size:13px;">${idx+1}. ${ch.title}</div>
           <span class="badge ${badgeClass}" style="margin-top:4px; display:inline-block;">${badgeText}</span>
         </div>
-        <a href="${ch.invite_link}" target="_blank" class="btn-secondary" style="text-decoration:none; display:inline-block;">Open</a>
+        <button onclick="openChannelLink('${ch.invite_link}')" class="btn-secondary" style="cursor:pointer;">Open</button>
       </div>
     `;
   });
@@ -173,10 +173,43 @@ function renderActivityList(activities) {
   container.innerHTML = html;
 }
 
-function renderErrorState(message) {
-  const refInput = document.getElementById("refLinkInput");
-  if (refInput && refInput.value.includes("Loading")) {
-    refInput.value = "https://t.me/OkFansBot";
+function openChannelLink(url) {
+  if (tg && tg.openTelegramLink && url.includes("t.me/")) {
+    tg.openTelegramLink(url);
+  } else if (tg && tg.openLink) {
+    tg.openLink(url);
+  } else {
+    window.open(url, "_blank");
+  }
+}
+
+async function redeemBundle() {
+  const btn = document.getElementById("btnClaimBundle");
+  if (btn) btn.disabled = true;
+  
+  try {
+    const res = await apiFetch("/api/rewards/redeem", { method: "POST" });
+    alert(`🎉 Success!\n\n${res.message}`);
+    loadDashboardData();
+  } catch (err) {
+    alert(`⚠️ Redemption Info:\n\n${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function checkVerification() {
+  const btn = document.getElementById("btnCheckVerif");
+  if (btn) btn.disabled = true;
+  
+  try {
+    const res = await apiFetch("/api/verification/check", { method: "POST" });
+    alert(`🔍 Verification Status:\n\n${res.message}`);
+    loadDashboardData();
+  } catch (err) {
+    alert(`⚠️ Verification Info:\n\n${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -186,7 +219,7 @@ async function claimDailyReward() {
     alert(`🎉 Daily VIP Bonus Claimed! +1 Credit added. Daily Streak: ${res.streak} days 🔥`);
     loadDashboardData();
   } catch (err) {
-    alert(err.message || "Could not claim daily bonus right now.");
+    alert(`⚠️ Daily Bonus Info:\n\n${err.message}`);
   }
 }
 
