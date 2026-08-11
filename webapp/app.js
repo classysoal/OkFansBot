@@ -3,7 +3,9 @@
  */
 
 const tg = window.Telegram?.WebApp;
-const API_BASE = window.location.origin;
+const API_BASE = window.location.hostname.includes("vercel.app") 
+  ? "https://okfansbot-826r.onrender.com" 
+  : window.location.origin;
 
 document.addEventListener("DOMContentLoaded", () => {
   if (tg) {
