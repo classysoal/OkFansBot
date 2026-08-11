@@ -63,16 +63,14 @@ class SQLiteConnectionWrapper:
 # --- CONNECTION MANAGEMENT ---
 
 def get_db_connection():
-    global IS_POSTGRES
-    if IS_POSTGRES:
+    if DATABASE_URL:
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
-            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=3)
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=10)
             return conn
         except Exception as e:
-            logging.warning(f"⚠️ PostgreSQL connection failed: {e}. Falling back to local SQLite database.")
-            IS_POSTGRES = False
+            logging.warning(f"⚠️ PostgreSQL connection temporary issue: {e}. Using local SQLite fallback for this query.")
 
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -1151,7 +1149,7 @@ def get_next_reward_video(user_id: int, vault: str, max_limit: int = None) -> di
 
             if selected:
                 try:
-                    if IS_POSTGRES:
+                    if is_postgres_conn(conn):
                         cursor.execute("INSERT INTO user_video_history (user_id, video_id) VALUES (%s, %s) ON CONFLICT (user_id, video_id) DO NOTHING", (user_id, selected['video_id']))
                     else:
                         cursor.execute("INSERT OR IGNORE INTO user_video_history (user_id, video_id) VALUES (%s, %s)", (user_id, selected['video_id']))
@@ -1165,6 +1163,9 @@ def get_next_reward_video(user_id: int, vault: str, max_limit: int = None) -> di
     finally:
         conn.close()
 
+def is_postgres_conn(conn) -> bool:
+    return not isinstance(conn, SQLiteConnectionWrapper)
+
 # --- VIDEO DELIVERIES & AUTO-DELETION ---
 
 def record_video_delivery(user_id: int, video_id: int, chat_id: int, message_id: int, expiry_at: datetime) -> int:
@@ -1172,9 +1173,9 @@ def record_video_delivery(user_id: int, video_id: int, chat_id: int, message_id:
     try:
         with conn:
             cursor = conn.cursor()
-            expiry_str = expiry_at.isoformat()
+            expiry_str = expiry_at.isoformat() if isinstance(expiry_at, datetime) else str(expiry_at)
             
-            if IS_POSTGRES:
+            if is_postgres_conn(conn):
                 cursor.execute("""
                     INSERT INTO video_deliveries (user_id, video_id, chat_id, message_id, expiry_at, status)
                     VALUES (%s, %s, %s, %s, %s, 'delivered') RETURNING delivery_id
