@@ -1427,25 +1427,15 @@ async def on_startup(application: Application):
     StartupValidator.validate_preflight(config, BOT_TOKEN, OWNER_ID)
     await recover_deletion_jobs(application)
 
-def run_dummy_web_server():
-    from http.server import SimpleHTTPRequestHandler, HTTPServer
+def run_fastapi_server():
+    import uvicorn
+    from api import app
     port = int(os.getenv("PORT", 8080))
-    class DummyHandler(SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OkFansBot v2.0 is running.")
-
-        def log_message(self, format, *args):
-            pass
-            
     try:
-        server = HTTPServer(("0.0.0.0", port), DummyHandler)
-        logger.info(f"Dummy HTTP server listening on port {port} for Render Free Web Service...")
-        server.serve_forever()
+        logger.info(f"Starting FastAPI Authoritative REST API server on port {port}...")
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
     except Exception as e:
-        logger.warning(f"Failed to start dummy HTTP server: {e}")
+        logger.warning(f"Failed to start FastAPI server: {e}")
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Exception handling Telegram update:", exc_info=context.error)
@@ -1466,9 +1456,9 @@ def main():
     if not BOT_TOKEN or "YOUR_TELEGRAM_BOT_TOKEN" in BOT_TOKEN:
         raise RuntimeError("TG_BOT_TOKEN is missing or unconfigured in environment.")
     
-    # 2. Launch HTTP Keep-Alive Server thread for Web Deployments
+    # 2. Launch FastAPI REST API server thread for Web & Mini App Deployments
     import threading
-    t = threading.Thread(target=run_dummy_web_server, daemon=True)
+    t = threading.Thread(target=run_fastapi_server, daemon=True)
     t.start()
 
     # 3. Build Telegram Application
