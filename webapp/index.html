@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>OkFans VIP Club - Mini App</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Header Bar -->
+    <header class="app-header">
+      <div class="user-badge">
+        <div class="avatar-circle" id="userAvatar">VIP</div>
+        <div class="user-meta">
+          <div class="user-name" id="userName">Loading...</div>
+          <div class="vip-rank" id="vipRank">🌟 Novice VIP</div>
+        </div>
+      </div>
+      <div class="credit-counter">
+        <span class="coin-icon">🪙</span>
+        <span class="credit-amount" id="userCredits">0</span>
+      </div>
+    </header>
+
+    <!-- Main Navigation Content Views -->
+    <main class="content-area">
+      
+      <!-- Home Tab View -->
+      <section id="view-home" class="tab-view active">
+        <div class="banner-card">
+          <div class="banner-tag">🔥 EXCLUSIVE VIP ACCESS</div>
+          <h2 class="banner-title">OkFans Premium Rewards</h2>
+          <p class="banner-subtitle">Redeem exclusive video bundles and level up your VIP tier!</p>
+          <button class="btn-primary" onclick="switchTab('view-rewards')">🎁 Claim Video Bundle</button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Daily Streak</span>
+            <span class="stat-value" id="statStreak">0 Days 🔥</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Verified Invites</span>
+            <span class="stat-value" id="statInvites">0 👥</span>
+          </div>
+        </div>
+
+        <div class="quick-actions">
+          <button class="action-card" onclick="claimDailyReward()">
+            <span class="action-icon">🎁</span>
+            <span class="action-title">Daily Check-In</span>
+            <span class="action-sub">+1 Free Credit Daily</span>
+          </button>
+          <button class="action-card" onclick="switchTab('view-referrals')">
+            <span class="action-icon">⚡</span>
+            <span class="action-title">24h Invite Bonus</span>
+            <span class="action-sub">+5 Credits / Invite</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Verification Tab View -->
+      <section id="view-verification" class="tab-view">
+        <div class="section-card">
+          <h3>🔒 VIP Verification Quest</h3>
+          <p class="section-desc">Join partner channels below to activate full VIP reward access.</p>
+          <div id="channelList" class="channel-list">
+            <div class="loading-spinner">Loading required channels...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIP Tiers Tab View -->
+      <section id="view-tiers" class="tab-view">
+        <div class="section-card">
+          <h3>🏆 VIP Tier Escalation</h3>
+          <p class="section-desc">1 Credit ALWAYS costs 1 Credit. Higher ranks deliver bigger bundles!</p>
+          <div class="tier-list">
+            <div class="tier-card tier-novice">
+              <div class="tier-header">🌟 Novice VIP (Level 1)</div>
+              <div class="tier-yield">1 Credit = <b>5 Videos</b></div>
+              <div class="tier-req">Requirement: 0 Invites</div>
+            </div>
+            <div class="tier-card tier-silver">
+              <div class="tier-header">🔥 Silver VIP (Level 2)</div>
+              <div class="tier-yield">1 Credit = <b>7 Videos</b></div>
+              <div class="tier-req">Requirement: 1 Verified Invite</div>
+            </div>
+            <div class="tier-card tier-gold">
+              <div class="tier-header">👑 Gold VIP (Level 3)</div>
+              <div class="tier-yield">1 Credit = <b>10 Videos</b></div>
+              <div class="tier-req">Requirement: 4 Verified Invites</div>
+            </div>
+            <div class="tier-card tier-diamond">
+              <div class="tier-header">💎 Diamond VIP (Level 4)</div>
+              <div class="tier-yield">1 Credit = <b>15 Videos</b></div>
+              <div class="tier-req">Requirement: 7 Verified Invites</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Referrals Tab View -->
+      <section id="view-referrals" class="tab-view">
+        <div class="section-card">
+          <h3>⚡ 24-Hour Flash Power-Hour!</h3>
+          <p class="section-desc">Earn <b>5 Credits per invite</b> when your friends join & verify within 24 hours!</p>
+          <div class="link-box">
+            <input type="text" id="refLinkInput" readonly value="Loading referral link...">
+            <button class="btn-secondary" onclick="copyRefLink()">Copy Link</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Profile Tab View -->
+      <section id="view-profile" class="tab-view">
+        <div class="section-card">
+          <h3>👤 User Profile</h3>
+          <div class="profile-meta-list">
+            <div class="meta-item"><span>Telegram ID:</span> <strong id="profId">-</strong></div>
+            <div class="meta-item"><span>Current Rank:</span> <strong id="profRank">-</strong></div>
+            <div class="meta-item"><span>Available Credits:</span> <strong id="profCredits">-</strong></div>
+            <div class="meta-item"><span>Total Invites:</span> <strong id="profInvites">-</strong></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" onclick="switchTab('view-home', this)">
+        <span class="nav-icon">🏠</span>
+        <span class="nav-label">Home</span>
+      </button>
+      <button class="nav-item" onclick="switchTab('view-verification', this)">
+        <span class="nav-icon">🔒</span>
+        <span class="nav-label">Quest</span>
+      </button>
+      <button class="nav-item" onclick="switchTab('view-tiers', this)">
+        <span class="nav-icon">🏆</span>
+        <span class="nav-label">VIP Tiers</span>
+      </button>
+      <button class="nav-item" onclick="switchTab('view-referrals', this)">
+        <span class="nav-icon">🤝</span>
+        <span class="nav-label">Invite</span>
+      </button>
+      <button class="nav-item" onclick="switchTab('view-profile', this)">
+        <span class="nav-icon">👤</span>
+        <span class="nav-label">Profile</span>
+      </button>
+    </nav>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
