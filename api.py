@@ -212,14 +212,81 @@ def get_dashboard(current_user: dict = Depends(get_current_user)):
     active_channels = database.get_required_channels()
     ref_count = ReferralManager.get_verified_referrals_count(user_id)
     vip_info = database.get_user_vip_tier_info(user_id)
+    ref_code = ReferralManager.get_or_create_user_ref_code(user_id)
+    bot_username = config.get("bot_username", "OkFansBot")
+    ref_link = f"https://t.me/{bot_username}?start=ref_{ref_code}"
     
+    # Calculate progress to next rank
+    next_req = 1 if vip_info["level"] == 1 else (4 if vip_info["level"] == 2 else 7)
+    invites_needed = max(0, next_req - ref_count)
+    progress_pct = min(100, int((ref_count / max(1, next_req)) * 100))
+    
+    # Get required channels with explicit user status
+    claimed_count = database.get_user_claimed_videos_count(user_id)
+    batch_size = config.get("channels_per_verification_batch", 5)
+    total_channels = len(active_channels)
+    req_count = min(total_channels, (claimed_count + 1) * batch_size) if not current_user.get("starter_completed", 0) else total_channels
+    required_channels = active_channels[:req_count]
+    
+    formatted_channels = []
+    completed_channels_count = 0
+    for ch in required_channels:
+        evt = database.get_join_event(user_id, ch["id"])
+        st = "COMPLETED" if (evt and (evt.get("verified") == 1 or evt.get("status") in ["joined", "approved"])) else ("PENDING" if (evt and evt.get("status") == "requested") else "ACTION_REQUIRED")
+        if st == "COMPLETED":
+            completed_channels_count += 1
+        formatted_channels.append({
+            "id": ch["id"],
+            "title": ch["title"],
+            "label": ch["label"],
+            "invite_link": ch["invite_link"],
+            "verification_method": ch.get("verification_method", "direct_join"),
+            "status": st
+        })
+        
+    recent_activity = [
+        {"icon": "⚡", "title": "Account Registered", "time": "Active", "status": "Verified"},
+        {"icon": "🎁", "title": "Daily Bonus Eligibility", "time": "24h Cooldown", "status": "Available"}
+    ]
+    if current_user.get("starter_completed", 0):
+        recent_activity.insert(0, {"icon": "✓", "title": "VIP Verification Quest", "time": "Completed", "status": "Passed"})
+    if ref_count > 0:
+        recent_activity.insert(0, {"icon": "🤝", "title": f"Referred {ref_count} Friends", "time": "Verified", "status": "+Bonus"})
+        
     return {
-        "user": current_user,
-        "active_channels_count": len(active_channels),
-        "referral_count": ref_count,
-        "vip_info": vip_info,
-        "unlocked_limit": config.get("unlocked_video_limit", 50),
-        "maintenance_mode": config.get("maintenance_mode", False)
+        "user": {
+            "user_id": user_id,
+            "username": current_user.get("username") or f"user_{user_id}",
+            "first_name": current_user.get("first_name") or "VIP User",
+            "credits": current_user.get("credits", 0),
+            "checkin_streak": current_user.get("checkin_streak", 0),
+            "starter_completed": bool(current_user.get("starter_completed", 0))
+        },
+        "vip": {
+            "level": vip_info["level"],
+            "title": vip_info["title"],
+            "badge": vip_info["badge"],
+            "bundle_size": vip_info["bundle_size"],
+            "credit_cost": vip_info["credit_cost"],
+            "invites_needed": invites_needed,
+            "next_target": "Silver VIP" if vip_info["level"] == 1 else ("Gold VIP" if vip_info["level"] == 2 else "Diamond VIP"),
+            "progress_pct": progress_pct
+        },
+        "referrals": {
+            "ref_code": ref_code,
+            "ref_link": ref_link,
+            "verified_count": ref_count,
+            "qualified_count": ref_count,
+            "flash_bonus_credits": 5,
+            "standard_credits": 3
+        },
+        "verification": {
+            "is_completed": bool(current_user.get("starter_completed", 0)),
+            "completed_count": completed_channels_count,
+            "total_required": len(required_channels),
+            "channels": formatted_channels
+        },
+        "recent_activity": recent_activity
     }
 
 @app.get("/api/verification")

@@ -1,5 +1,6 @@
 /**
- * Telegram Mini App Frontend Application Logic
+ * OkFans VIP Club Mini App JavaScript Engine
+ * Single Aggregated Request (/api/dashboard), Skeleton Loaders, Local Caching, Error Retry States.
  */
 
 const tg = window.Telegram?.WebApp;
@@ -12,13 +13,26 @@ document.addEventListener("DOMContentLoaded", () => {
     tg.expand();
     tg.ready();
   }
-  loadUserProfile();
-  loadVerificationStatus();
-  loadReferralData();
+  
+  // 1. Instantly render cached state if available
+  loadCachedState();
+  
+  // 2. Fetch authoritative live aggregated dashboard
+  loadDashboardData();
 });
 
 function getInitData() {
   return tg ? tg.initData : "";
+}
+
+function loadCachedState() {
+  try {
+    const cached = localStorage.getItem("okfans_dashboard_cache");
+    if (cached) {
+      const data = JSON.parse(cached);
+      renderDashboard(data, true);
+    }
+  } catch (e) {}
 }
 
 async function apiFetch(endpoint, options = {}) {
@@ -28,78 +42,149 @@ async function apiFetch(endpoint, options = {}) {
   try {
     const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: "Network response was not ok" }));
-      throw new Error(err.detail || "API Request Failed");
+      const err = await res.json().catch(() => ({ detail: "API Error" }));
+      throw new Error(err.detail || "Server request failed");
     }
     return await res.json();
   } catch (err) {
-    console.error(`API Error [${endpoint}]:`, err);
+    console.error(`API Fetch Error [${endpoint}]:`, err);
     throw err;
   }
 }
 
-async function loadUserProfile() {
+async function loadDashboardData(isRetry = false) {
   try {
-    const data = await apiFetch("/api/me");
-    document.getElementById("userName").textContent = data.first_name || "VIP User";
-    document.getElementById("vipRank").textContent = `${data.vip_badge} ${data.vip_title}`;
-    document.getElementById("userCredits").textContent = data.credits;
-    document.getElementById("statStreak").textContent = `${data.checkin_streak} Days 🔥`;
-    document.getElementById("statInvites").textContent = `${data.referral_count} 👥`;
-    
-    document.getElementById("profId").textContent = data.user_id;
-    document.getElementById("profRank").textContent = data.vip_title;
-    document.getElementById("profCredits").textContent = `${data.credits} 🪙`;
-    document.getElementById("profInvites").textContent = `${data.referral_count} 👥`;
+    const data = await apiFetch("/api/dashboard");
+    localStorage.setItem("okfans_dashboard_cache", JSON.stringify(data));
+    renderDashboard(data, false);
   } catch (err) {
-    if (tg?.initDataUnsafe?.user) {
-      const u = tg.initDataUnsafe.user;
-      document.getElementById("userName").textContent = u.first_name;
-    }
+    console.warn("Failed to fetch live dashboard:", err);
+    renderErrorState(err.message || "Unable to connect to server.");
   }
 }
 
-async function loadVerificationStatus() {
-  try {
-    const data = await apiFetch("/api/verification");
-    const container = document.getElementById("channelList");
-    if (!container) return;
-    
-    if (data.is_completed) {
-      container.innerHTML = `<div style="color: #10b981; font-weight:700; padding:12px;">✅ All VIP Verification Quests Completed!</div>`;
-      return;
+function renderDashboard(data, isFromCache = false) {
+  const user = data.user || {};
+  const vip = data.vip || {};
+  const ref = data.referrals || {};
+  const verif = data.verification || {};
+  const act = data.recent_activity || [];
+
+  // 1. Header Info
+  document.getElementById("userName").textContent = user.first_name || "VIP User";
+  document.getElementById("vipRank").textContent = `${vip.badge || '🌟'} ${vip.title || 'Novice VIP'}`;
+  document.getElementById("userCredits").textContent = user.credits !== undefined ? user.credits : 0;
+  
+  const avatarInit = (user.first_name || "VIP").substring(0, 3).toUpperCase();
+  document.getElementById("userAvatar").textContent = avatarInit;
+  document.getElementById("profAvatar").textContent = avatarInit;
+
+  // 2. Home Progress Card
+  document.getElementById("homeRankTitle").textContent = `${vip.badge || '🌟'} ${vip.title || 'Novice VIP'}`;
+  document.getElementById("homeRankTarget").textContent = `Target: ${vip.next_target || 'Silver VIP'}`;
+  document.getElementById("homeProgressBar").style.width = `${vip.progress_pct || 0}%`;
+  document.getElementById("homeProgressFooter").innerHTML = `
+    <span>${ref.verified_count || 0} verified referrals</span>
+    <span>${vip.invites_needed || 0} more needed</span>
+  `;
+
+  // 3. Quest / Verification Center
+  document.getElementById("questProgressBadge").textContent = `${verif.completed_count || 0} / ${verif.total_required || 0} Completed`;
+  renderVerificationList(verif.channels || []);
+
+  // 4. VIP Tiers Progress
+  document.getElementById("currentVipTitle").textContent = vip.title || "Novice VIP";
+  document.getElementById("vipProgressBar").style.width = `${vip.progress_pct || 0}%`;
+  document.getElementById("vipProgressSub").textContent = `Next Target: ${vip.next_target || 'Silver VIP'} (${vip.invites_needed || 0} invite needed)`;
+
+  // 5. Referrals / Invite Center
+  document.getElementById("refLinkInput").value = ref.ref_link || "https://t.me/OkFansBot";
+  document.getElementById("refStatInvited").textContent = ref.verified_count || 0;
+  document.getElementById("refStatQualified").textContent = ref.qualified_count || 0;
+
+  // 6. Profile View
+  document.getElementById("profName").textContent = user.first_name || "VIP User";
+  document.getElementById("profRankBadge").textContent = `${vip.badge || '🌟'} ${vip.title || 'Novice VIP'}`;
+  document.getElementById("profId").textContent = user.user_id || "-";
+  document.getElementById("profCredits").textContent = `${user.credits !== undefined ? user.credits : 0} 🪙`;
+  document.getElementById("profStreak").textContent = `${user.checkin_streak || 0} Days 🔥`;
+  document.getElementById("profInvites").textContent = `${ref.verified_count || 0} 👥`;
+
+  // 7. Activity List
+  renderActivityList(act);
+}
+
+function renderVerificationList(channels) {
+  const container = document.getElementById("channelList");
+  if (!container) return;
+
+  if (channels.length === 0) {
+    container.innerHTML = `<div style="color:#10b981; font-weight:700; padding:12px;">✅ All VIP Verification Quests Completed!</div>`;
+    return;
+  }
+
+  let html = "";
+  channels.forEach((ch, idx) => {
+    let badgeClass = "badge-warning";
+    let badgeText = "Action Required";
+    if (ch.status === "COMPLETED") {
+      badgeClass = "badge-success";
+      badgeText = "✓ Completed";
+    } else if (ch.status === "PENDING") {
+      badgeClass = "badge-info";
+      badgeText = "⏳ Pending Request";
     }
-    
-    let html = "";
-    data.required_channels.forEach((ch, idx) => {
-      html += `
-        <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:10px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <div style="font-weight:700; font-size:14px;">${idx+1}. ${ch.title}</div>
-            <div style="font-size:11px; color:#94a3b8;">${ch.verification_method === 'join_request' ? 'Request to Join' : 'Direct Join'}</div>
-          </div>
-          <a href="${ch.invite_link}" target="_blank" style="padding:6px 12px; background:#8b5cf6; border-radius:8px; color:white; text-decoration:none; font-size:12px; font-weight:700;">Join</a>
+
+    html += `
+      <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:10px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-weight:700; font-size:13px;">${idx+1}. ${ch.title}</div>
+          <span class="badge ${badgeClass}" style="margin-top:4px; display:inline-block;">${badgeText}</span>
         </div>
-      `;
-    });
-    container.innerHTML = html;
-  } catch (err) {
-    console.error("Error loading verification status:", err);
-  }
+        <a href="${ch.invite_link}" target="_blank" class="btn-secondary" style="text-decoration:none; display:inline-block;">Open</a>
+      </div>
+    `;
+  });
+  container.innerHTML = html;
 }
 
-async function loadReferralData() {
-  try {
-    const data = await apiFetch("/api/referrals");
-    document.getElementById("refLinkInput").value = data.ref_link;
-  } catch (err) {}
+function renderActivityList(activities) {
+  const container = document.getElementById("homeActivityList");
+  if (!container) return;
+
+  if (activities.length === 0) {
+    container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No recent activity logged.</div>`;
+    return;
+  }
+
+  let html = "";
+  activities.forEach(item => {
+    html += `
+      <div class="activity-item">
+        <span class="activity-icon">${item.icon || '⚡'}</span>
+        <div class="activity-details">
+          <span class="activity-title">${item.title}</span>
+          <span class="activity-time">${item.time}</span>
+        </div>
+        <span class="badge badge-success">${item.status}</span>
+      </div>
+    `;
+  });
+  container.innerHTML = html;
+}
+
+function renderErrorState(message) {
+  const refInput = document.getElementById("refLinkInput");
+  if (refInput && refInput.value.includes("Loading")) {
+    refInput.value = "https://t.me/OkFansBot";
+  }
 }
 
 async function claimDailyReward() {
   try {
     const res = await apiFetch("/api/rewards/claim-daily", { method: "POST" });
     alert(`🎉 Daily VIP Bonus Claimed! +1 Credit added. Daily Streak: ${res.streak} days 🔥`);
-    loadUserProfile();
+    loadDashboardData();
   } catch (err) {
     alert(err.message || "Could not claim daily bonus right now.");
   }

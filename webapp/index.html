@@ -11,74 +11,124 @@
 </head>
 <body>
   <div id="app" class="app-container">
-    <!-- Header Bar -->
+    <!-- Top Header Bar -->
     <header class="app-header">
       <div class="user-badge">
         <div class="avatar-circle" id="userAvatar">VIP</div>
         <div class="user-meta">
-          <div class="user-name" id="userName">Loading...</div>
-          <div class="vip-rank" id="vipRank">🌟 Novice VIP</div>
+          <div class="user-name" id="userName"><div class="skeleton skeleton-text" style="width: 80px;"></div></div>
+          <div class="vip-rank" id="vipRank"><div class="skeleton skeleton-text" style="width: 100px;"></div></div>
         </div>
       </div>
       <div class="credit-counter">
         <span class="coin-icon">🪙</span>
-        <span class="credit-amount" id="userCredits">0</span>
+        <span class="credit-amount" id="userCredits"><div class="skeleton skeleton-text" style="width: 24px;"></div></span>
       </div>
     </header>
 
-    <!-- Main Navigation Content Views -->
+    <!-- Main Content Area -->
     <main class="content-area">
       
       <!-- Home Tab View -->
       <section id="view-home" class="tab-view active">
-        <div class="banner-card">
-          <div class="banner-tag">🔥 EXCLUSIVE VIP ACCESS</div>
-          <h2 class="banner-title">OkFans Premium Rewards</h2>
-          <p class="banner-subtitle">Redeem exclusive video bundles and level up your VIP tier!</p>
-          <button class="btn-primary" onclick="switchTab('view-rewards')">🎁 Claim Video Bundle</button>
-        </div>
-
-        <div class="stats-grid">
-          <div class="stat-card">
-            <span class="stat-label">Daily Streak</span>
-            <span class="stat-value" id="statStreak">0 Days 🔥</span>
+        <!-- User Progress Card -->
+        <div class="progress-card">
+          <div class="progress-header">
+            <span class="progress-title" id="homeRankTitle">⭐ Novice VIP</span>
+            <span class="progress-subtitle" id="homeRankTarget">Target: 🔥 Silver VIP</span>
           </div>
-          <div class="stat-card">
-            <span class="stat-label">Verified Invites</span>
-            <span class="stat-value" id="statInvites">0 👥</span>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="homeProgressBar" style="width: 0%;"></div>
+          </div>
+          <div class="progress-footer" id="homeProgressFooter">
+            <span>0 / 1 verified referrals</span>
+            <span id="homeInvitesNeeded">1 more needed</span>
           </div>
         </div>
 
-        <div class="quick-actions">
+        <!-- Quick Action Cards Grid -->
+        <div class="action-grid">
+          <button class="action-card primary-card" onclick="switchTab('view-rewards')">
+            <span class="action-icon">🎁</span>
+            <div class="action-meta">
+              <span class="action-title">Claim Video Bundle</span>
+              <span class="action-sub">Redeem unseen videos</span>
+            </div>
+          </button>
+
           <button class="action-card" onclick="claimDailyReward()">
             <span class="action-icon">🎁</span>
-            <span class="action-title">Daily Check-In</span>
-            <span class="action-sub">+1 Free Credit Daily</span>
+            <div class="action-meta">
+              <span class="action-title">Daily Bonus</span>
+              <span class="action-sub">+1 Credit Free</span>
+            </div>
           </button>
+
           <button class="action-card" onclick="switchTab('view-referrals')">
             <span class="action-icon">⚡</span>
-            <span class="action-title">24h Invite Bonus</span>
-            <span class="action-sub">+5 Credits / Invite</span>
+            <div class="action-meta">
+              <span class="action-title">24h Invite Bonus</span>
+              <span class="action-sub">+5 Credits / Invite</span>
+            </div>
           </button>
+
+          <button class="action-card" onclick="switchTab('view-verification')">
+            <span class="action-icon">🔐</span>
+            <div class="action-meta">
+              <span class="action-title">Quest Center</span>
+              <span class="action-sub">Verify membership</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Recent Activity Section -->
+        <div class="section-card">
+          <div class="section-header">
+            <h4>Recent Activity</h4>
+          </div>
+          <div id="homeActivityList" class="activity-list">
+            <div class="activity-item">
+              <span class="activity-icon">⚡</span>
+              <div class="activity-details">
+                <span class="activity-title">VIP Account Ready</span>
+                <span class="activity-time">Active</span>
+              </div>
+              <span class="badge badge-success">Verified</span>
+            </div>
+          </div>
         </div>
       </section>
 
-      <!-- Verification Tab View -->
+      <!-- Quest Tab View (Verification Center) -->
       <section id="view-verification" class="tab-view">
         <div class="section-card">
-          <h3>🔒 VIP Verification Quest</h3>
-          <p class="section-desc">Join partner channels below to activate full VIP reward access.</p>
-          <div id="channelList" class="channel-list">
-            <div class="loading-spinner">Loading required channels...</div>
+          <div class="section-header">
+            <h3>🔐 Verification Center</h3>
+            <span class="badge badge-info" id="questProgressBadge">0 / 0 Completed</span>
           </div>
+          <p class="section-desc">Complete your required channel steps below to activate full VIP reward access.</p>
+          <div id="channelList" class="channel-list">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>
+          <button class="btn-primary" style="margin-top: 14px;" onclick="loadDashboardData(true)">🔄 Re-Check Verification</button>
         </div>
       </section>
 
       <!-- VIP Tiers Tab View -->
       <section id="view-tiers" class="tab-view">
+        <div class="section-card current-tier-banner">
+          <span class="badge badge-warning">YOUR CURRENT LEVEL</span>
+          <h3 id="currentVipTitle">Novice VIP</h3>
+          <div class="progress-bar-container" style="margin: 10px 0;">
+            <div class="progress-bar-fill" id="vipProgressBar" style="width: 0%;"></div>
+          </div>
+          <p id="vipProgressSub" class="section-desc" style="margin: 0; color: white;">Next Target: Silver VIP (1 invite needed)</p>
+        </div>
+
         <div class="section-card">
-          <h3>🏆 VIP Tier Escalation</h3>
-          <p class="section-desc">1 Credit ALWAYS costs 1 Credit. Higher ranks deliver bigger bundles!</p>
+          <h3>🏆 VIP Tier Roadmap</h3>
+          <p class="section-desc">1 Credit ALWAYS costs 1 Credit. Higher ranks deliver bigger video bundles!</p>
           <div class="tier-list">
             <div class="tier-card tier-novice">
               <div class="tier-header">🌟 Novice VIP (Level 1)</div>
@@ -107,24 +157,64 @@
       <!-- Referrals Tab View -->
       <section id="view-referrals" class="tab-view">
         <div class="section-card">
-          <h3>⚡ 24-Hour Flash Power-Hour!</h3>
+          <h3>🤝 Invite Center</h3>
           <p class="section-desc">Earn <b>5 Credits per invite</b> when your friends join & verify within 24 hours!</p>
+          
           <div class="link-box">
             <input type="text" id="refLinkInput" readonly value="Loading referral link...">
             <button class="btn-secondary" onclick="copyRefLink()">Copy Link</button>
+          </div>
+
+          <div class="stats-grid" style="margin-top: 14px;">
+            <div class="stat-card">
+              <span class="stat-label">Total Invites</span>
+              <span class="stat-value" id="refStatInvited">0</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Qualified Referrals</span>
+              <span class="stat-value" id="refStatQualified">0</span>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- Profile Tab View -->
       <section id="view-profile" class="tab-view">
-        <div class="section-card">
-          <h3>👤 User Profile</h3>
+        <div class="profile-card">
+          <div class="profile-header-info">
+            <div class="avatar-circle-large" id="profAvatar">VIP</div>
+            <div>
+              <h3 id="profName">VIP User</h3>
+              <span class="vip-rank" id="profRankBadge">🌟 Novice VIP</span>
+            </div>
+          </div>
           <div class="profile-meta-list">
-            <div class="meta-item"><span>Telegram ID:</span> <strong id="profId">-</strong></div>
-            <div class="meta-item"><span>Current Rank:</span> <strong id="profRank">-</strong></div>
-            <div class="meta-item"><span>Available Credits:</span> <strong id="profCredits">-</strong></div>
-            <div class="meta-item"><span>Total Invites:</span> <strong id="profInvites">-</strong></div>
+            <div class="meta-item"><span>Telegram ID:</span> <strong id="profId">Loading...</strong></div>
+            <div class="meta-item"><span>Available Credits:</span> <strong id="profCredits">0 🪙</strong></div>
+            <div class="meta-item"><span>Check-In Streak:</span> <strong id="profStreak">0 Days 🔥</strong></div>
+            <div class="meta-item"><span>Total Referrals:</span> <strong id="profInvites">0 👥</strong></div>
+          </div>
+        </div>
+
+        <div class="section-card" style="margin-top: 14px;">
+          <h4>Account Details & Settings</h4>
+          <div class="menu-list">
+            <div class="menu-item" onclick="switchTab('view-verification')">
+              <span>🔒 Verification History</span>
+              <span class="menu-arrow">›</span>
+            </div>
+            <div class="menu-item" onclick="switchTab('view-referrals')">
+              <span>🤝 Referral Breakdown</span>
+              <span class="menu-arrow">›</span>
+            </div>
+            <div class="menu-item" onclick="switchTab('view-tiers')">
+              <span>🏆 VIP Tier Progress</span>
+              <span class="menu-arrow">›</span>
+            </div>
+            <div class="menu-item">
+              <span>📜 Rules & Privacy Policy</span>
+              <span class="menu-arrow">›</span>
+            </div>
           </div>
         </div>
       </section>
@@ -138,12 +228,12 @@
         <span class="nav-label">Home</span>
       </button>
       <button class="nav-item" onclick="switchTab('view-verification', this)">
-        <span class="nav-icon">🔒</span>
+        <span class="nav-icon">🔐</span>
         <span class="nav-label">Quest</span>
       </button>
       <button class="nav-item" onclick="switchTab('view-tiers', this)">
         <span class="nav-icon">🏆</span>
-        <span class="nav-label">VIP Tiers</span>
+        <span class="nav-label">VIP</span>
       </button>
       <button class="nav-item" onclick="switchTab('view-referrals', this)">
         <span class="nav-icon">🤝</span>
