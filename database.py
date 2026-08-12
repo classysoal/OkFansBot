@@ -1063,11 +1063,6 @@ def mark_join_left(user_id: int, channel_db_id: int) -> bool:
     try:
         with conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT verified FROM join_events WHERE user_id = %s AND channel_db_id = %s", (user_id, channel_db_id))
-            row = cursor.fetchone()
-            if not row or row['verified'] == 0:
-                return False
-
             cursor.execute("""
                 UPDATE join_events 
                 SET status = 'left', verified = 0
