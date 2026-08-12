@@ -58,6 +58,15 @@ app.add_middleware(
 if os.path.exists("webapp"):
     app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")
 
+@app.get("/")
+def root_health_check():
+    return {
+        "status": "online",
+        "service": "OkFansBot Authoritative REST API & Telegram Bot",
+        "version": "2.0.0",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
 # --- TELEGRAM LOGIN WIDGET OAUTH ---
 
 @app.get("/auth/telegram")
