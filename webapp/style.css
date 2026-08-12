@@ -494,3 +494,48 @@ body {
   font-size: 10px;
   font-weight: 600;
 }
+
+/* Sleek Toast Notification System (Zero Alert Boxes) */
+.toast-notification {
+  position: fixed;
+  top: -80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 41, 59, 0.95);
+  border: 1px solid var(--accent-purple);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  padding: 10px 18px;
+  border-radius: 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 9999;
+  transition: top 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.35s ease;
+  opacity: 0;
+  pointer-events: none;
+  max-width: 90%;
+  width: max-content;
+}
+
+.toast-notification.show {
+  top: 18px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.toast-notification.toast-success {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.25);
+}
+
+.toast-notification.toast-error {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.25);
+}
+
+#toastText {
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+}

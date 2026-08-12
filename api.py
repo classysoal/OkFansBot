@@ -14,6 +14,7 @@ from typing import Optional
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -56,6 +57,44 @@ app.add_middleware(
 
 if os.path.exists("webapp"):
     app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")
+
+# --- TELEGRAM LOGIN WIDGET OAUTH ---
+
+@app.get("/auth/telegram")
+@app.get("/api/auth/telegram-widget")
+def telegram_widget_auth(request: Request):
+    """
+    Handles Telegram Login Widget OAuth authentication.
+    Calculates SHA256 secret key of BOT_TOKEN and verifies hash signature.
+    """
+    params = dict(request.query_params)
+    received_hash = params.pop("hash", None)
+    
+    if not received_hash or "id" not in params:
+        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=missing_hash")
+
+    data_check_arr = [f"{k}={v}" for k, v in sorted(params.items())]
+    data_check_string = "\n".join(data_check_arr)
+    
+    secret_key = hashlib.sha256(BOT_TOKEN.encode("utf-8")).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    
+    if not hmac.compare_digest(computed_hash.lower(), received_hash.lower()):
+        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=invalid_signature")
+        
+    try:
+        user_id = int(params.get("id"))
+        username = params.get("username", "")
+        first_name = params.get("first_name", "User")
+        
+        user = database.get_user(user_id)
+        if not user:
+            database.register_user(user_id, username, first_name)
+            
+        return RedirectResponse(url=f"https://okfansbot.vercel.app/?auth=success&user_id={user_id}")
+    except Exception as e:
+        logger.error(f"Widget auth error: {e}")
+        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=exception")
 
 # --- TELEGRAM INITDATA HMAC VALIDATION ---
 

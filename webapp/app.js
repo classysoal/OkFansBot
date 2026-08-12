@@ -1,7 +1,7 @@
 /**
  * OkFans VIP Club Mini App JavaScript Engine
  * Single Aggregated Request (/api/dashboard), Skeleton Loaders, Local Caching, Error Retry States.
- * Real Functional Handlers for Redeem Bundle, Re-Check Verification, Daily Claim, and Channel Deep-linking.
+ * Sleek Toast Notification System (Zero Browser Alert Boxes) + Native Haptic Feedback.
  */
 
 const tg = window.Telegram?.WebApp;
@@ -9,12 +9,17 @@ const API_BASE = window.location.hostname.includes("vercel.app")
   ? "https://okfansbot-826r.onrender.com" 
   : window.location.origin;
 
+let toastTimer = null;
+
 document.addEventListener("DOMContentLoaded", () => {
   if (tg) {
     tg.expand();
     tg.ready();
   }
   
+  // Check for URL auth status
+  checkUrlAuthStatus();
+
   // 1. Instantly render cached state if available
   loadCachedState();
   
@@ -24,6 +29,42 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function getInitData() {
   return tg ? tg.initData : "";
+}
+
+function triggerHaptic(type = "success") {
+  if (tg && tg.HapticFeedback) {
+    try {
+      tg.HapticFeedback.notificationOccurred(type);
+    } catch (e) {}
+  }
+}
+
+function showToast(message, type = "info", icon = "ℹ️") {
+  const toast = document.getElementById("toast");
+  const toastText = document.getElementById("toastText");
+  const toastIcon = document.getElementById("toastIcon");
+
+  if (!toast || !toastText) return;
+
+  toastText.textContent = message;
+  toastIcon.textContent = icon;
+  toast.className = `toast-notification toast-${type} show`;
+
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.className = "toast-notification";
+  }, 3500);
+}
+
+function checkUrlAuthStatus() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("auth") === "success") {
+    showToast("Telegram OAuth login successful!", "success", "🎉");
+    triggerHaptic("success");
+  } else if (params.get("auth_error")) {
+    showToast("Telegram Login error: " + params.get("auth_error"), "error", "⚠️");
+    triggerHaptic("error");
+  }
 }
 
 function loadCachedState() {
@@ -174,6 +215,7 @@ function renderActivityList(activities) {
 }
 
 function openChannelLink(url) {
+  triggerHaptic("success");
   if (tg && tg.openTelegramLink && url.includes("t.me/")) {
     tg.openTelegramLink(url);
   } else if (tg && tg.openLink) {
@@ -189,10 +231,12 @@ async function redeemBundle() {
   
   try {
     const res = await apiFetch("/api/rewards/redeem", { method: "POST" });
-    alert(`🎉 Success!\n\n${res.message}`);
+    triggerHaptic("success");
+    showToast(res.message, "success", "🎉");
     loadDashboardData();
   } catch (err) {
-    alert(`⚠️ Redemption Info:\n\n${err.message}`);
+    triggerHaptic("error");
+    showToast(err.message || "Could not redeem bundle.", "error", "⚠️");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -204,10 +248,17 @@ async function checkVerification() {
   
   try {
     const res = await apiFetch("/api/verification/check", { method: "POST" });
-    alert(`🔍 Verification Status:\n\n${res.message}`);
+    if (res.all_passed) {
+      triggerHaptic("success");
+      showToast(res.message, "success", "🎉");
+    } else {
+      triggerHaptic("error");
+      showToast(res.message, "error", "🔍");
+    }
     loadDashboardData();
   } catch (err) {
-    alert(`⚠️ Verification Info:\n\n${err.message}`);
+    triggerHaptic("error");
+    showToast(err.message || "Verification check failed.", "error", "⚠️");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -216,10 +267,12 @@ async function checkVerification() {
 async function claimDailyReward() {
   try {
     const res = await apiFetch("/api/rewards/claim-daily", { method: "POST" });
-    alert(`🎉 Daily VIP Bonus Claimed! +1 Credit added. Daily Streak: ${res.streak} days 🔥`);
+    triggerHaptic("success");
+    showToast(`Daily VIP Bonus Claimed! +1 Credit added. Streak: ${res.streak} days 🔥`, "success", "🎁");
     loadDashboardData();
   } catch (err) {
-    alert(`⚠️ Daily Bonus Info:\n\n${err.message}`);
+    triggerHaptic("error");
+    showToast(err.message || "Could not claim daily bonus.", "error", "⏳");
   }
 }
 
@@ -227,7 +280,8 @@ function copyRefLink() {
   const input = document.getElementById("refLinkInput");
   input.select();
   document.execCommand("copy");
-  alert("📋 Referral link copied to clipboard!");
+  triggerHaptic("success");
+  showToast("Referral link copied to clipboard!", "success", "📋");
 }
 
 function switchTab(viewId, btnEl) {
