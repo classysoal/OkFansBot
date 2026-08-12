@@ -1,4 +1,4 @@
-# 🚀 Production Deployment Master Guide
+# 🚀 Production Deployment Master Guide — OkFansBot v2.0
 
 As a Lead System Architect, here is the professional, production-grade deployment strategy for your **Telegram Bot + Telegram Mini App + FastAPI Backend**.
 
@@ -13,7 +13,7 @@ As a Lead System Architect, here is the professional, production-grade deploymen
 │  Deployed on: Vercel CDN       │        │  Deployed on: Render / Railway │
 └───────────────┬────────────────┘        └───────────────┬────────────────┘
                 │                                         │
-                │ HTTPS initData API Requests             │ Database Queries
+                │ HTTPS Session / initData API            │ Database Queries
                 ▼                                         ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                   Cloud Supabase PostgreSQL Database                     │
@@ -24,58 +24,62 @@ As a Lead System Architect, here is the professional, production-grade deploymen
 
 ## 🌐 PART 1: Deploying Frontend Mini App to Vercel (100% Free)
 
-Telegram Mini Apps **MUST BE SERVED OVER HTTPS**. Vercel gives you a free SSL domain automatically (`https://your-app.vercel.app`).
+Telegram Mini Apps **MUST BE SERVED OVER HTTPS**. Vercel provides a free SSL domain automatically (`https://okfansbot.vercel.app`).
 
 ### Step-by-Step Vercel Deployment:
 1. **Push Code to GitHub**:
-   - Create a repository on GitHub (e.g. `OkFansBot`).
-   - Push your code:
-     ```bash
-     git init
-     git add .
-     git commit -m "Production ready release"
-     git remote add origin https://github.com/YOUR_USERNAME/OkFansBot.git
-     git push -u origin main
-     ```
+   - Push your code to your repository: `https://github.com/classysoal/OkFansBot.git`.
 2. **Import into Vercel**:
    - Go to [vercel.com](https://vercel.com) and log in.
-   - Click **"Add New" ➔ "Project"**.
-   - Import your GitHub repository `OkFansBot`.
-   - Vercel will automatically detect `vercel.json` and deploy the `webapp/` folder!
-3. **Copy your Live Vercel URL**:
-   - Your live Mini App will be online at `https://okfansbot.vercel.app`.
+   - Click **"Add New" ➔ "Project"** and import `OkFansBot`.
+   - Vercel automatically detects `vercel.json` and serves `webapp/`.
 
 ---
 
-## ⚙️ PART 2: Deploying Python Bot & REST API to Render / Railway (100% Free)
+## ⚙️ PART 2: Deploying Python Bot & REST API to Render (100% Free)
 
-Python codes (`bot.py` and `api.py`) run continuously in the cloud.
+Render runs Python 3.13/3.14 web services with automated GitHub deploys.
 
-### Step-by-Step Render Deployment:
-1. Go to [render.com](https://render.com) and log in.
-2. Click **"New" ➔ "Blueprint"**.
-3. Connect your GitHub repository `OkFansBot`.
-4. Render will read `render.yaml` and create two services automatically:
-   - **`okfans-backend-api`** (FastAPI Web Service)
-   - **`okfans-telegram-bot`** (Telegram Bot Worker)
-5. Set Environment Variables on Render:
-   - `TG_BOT_TOKEN` = `8938399688:AAHPaPDM5qCZyJA0X1ccLiQP45yuQPDB8Uo`
-   - `DATABASE_URL` = `postgresql://postgres:4xSukoon%40777@db.ztnkwhtmyalklnjikcdk.supabase.co:5432/postgres`
+### Required Environment Variables on Render:
+
+| Variable Name | Example Value | Description |
+| :--- | :--- | :--- |
+| `TG_BOT_TOKEN` | `8938399688:AAHPaPDM5qCZy...` | Telegram Bot Token from BotFather |
+| `DATABASE_URL` | `postgresql://postgres:...@db...supabase.co:5432/postgres` | Cloud Supabase PostgreSQL Connection String |
+| `TELEGRAM_LOGIN_CLIENT_ID` | `8938399688` | Telegram OAuth Client ID |
+| `TELEGRAM_LOGIN_CLIENT_SECRET` | `6BSiv8jcdx9EWAY...` | Telegram OAuth Client Secret |
+| `ENVIRONMENT` | `production` | Production mode (disables owner preview fallback) |
+| `PORT` | `8080` | Server listening port |
 
 ---
 
-## 🤖 PART 3: Linking Mini App to Telegram Bot
-
-Now connect your live Vercel URL (`https://okfansbot.vercel.app`) to your Telegram Bot:
+## 🤖 PART 3: Configuring Telegram Bot & OAuth in BotFather
 
 1. Open Telegram and search for `@BotFather`.
-2. Send command: `/mybots` ➔ Select `@OkFansBot`.
-3. Tap **Bot Settings ➔ Menu Button ➔ Configure Menu Button**.
-4. Send your live Vercel URL: `https://okfansbot.vercel.app`.
-5. Set Button Title: `🎁 VIP Club`.
-
-Now, whenever users tap the Menu Button or `/start` in Telegram, your live Mini App opens seamlessly inside Telegram!
+2. Select your bot (`@OkFansBot`).
+3. **Configure Mini App URL**:
+   - Click **Bot Settings ➔ Menu Button / Main App**.
+   - Set WebApp URL to: `https://okfansbot.vercel.app/`
+4. **Configure Telegram Login Widget / OIDC Redirect URIs**:
+   - Click **Bot Settings ➔ Domain / Login Widget**.
+   - Add Allowed Origin: `https://okfansbot.vercel.app/`
+   - Add Redirect URI: `https://okfansbot.vercel.app/auth/telegram/callback`
 
 ---
 
-*OkFansBot Master Deployment Guide — Maintained by Engineering Team.*
+## 🧪 PART 4: Verification & Operational Tests
+
+Run automated integration tests:
+```bash
+python -m unittest tests/test_verification_pipeline.py
+```
+
+Verify backend health endpoint:
+```bash
+curl https://okfansbot-826r.onrender.com/
+```
+
+Verify admin observability health:
+```bash
+curl https://okfansbot-826r.onrender.com/api/admin/health
+```
