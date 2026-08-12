@@ -1,7 +1,6 @@
 /**
  * OkFans VIP Club Mini App JavaScript Engine
- * Single Aggregated Request (/api/dashboard), Skeleton Loaders, Local Caching, Error Retry States.
- * Explicit Verification State Badges (MEMBER, REQUEST_PENDING, LEFT, CHECK_ERROR).
+ * Authoritative Telegram Identity -> Session -> Aggregated Dashboard Pipeline.
  */
 
 const tg = window.Telegram?.WebApp;
@@ -10,8 +9,9 @@ const API_BASE = window.location.hostname.includes("vercel.app")
   : window.location.origin;
 
 let toastTimer = null;
+let currentSessionToken = localStorage.getItem("okfans_session_token") || null;
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   if (tg) {
     tg.expand();
     tg.ready();
@@ -19,7 +19,14 @@ document.addEventListener("DOMContentLoaded", () => {
   
   checkUrlAuthStatus();
   loadCachedState();
-  loadDashboardData();
+  
+  // Authenticate silently if initData is present
+  if (getInitData()) {
+    await authenticateMiniApp();
+  }
+  
+  // Load fresh authoritative dashboard data
+  await loadDashboardData();
 });
 
 function getInitData() {
@@ -53,12 +60,41 @@ function showToast(message, type = "info", icon = "ℹ️") {
 
 function checkUrlAuthStatus() {
   const params = new URLSearchParams(window.location.search);
+  const token = params.get("session_token");
+  if (token) {
+    currentSessionToken = token;
+    localStorage.setItem("okfans_session_token", token);
+  }
+  
   if (params.get("auth") === "success") {
     showToast("Telegram OAuth login successful!", "success", "🎉");
     triggerHaptic("success");
   } else if (params.get("auth_error")) {
     showToast("Telegram Login error: " + params.get("auth_error"), "error", "⚠️");
     triggerHaptic("error");
+  }
+}
+
+async function authenticateMiniApp() {
+  const rawInitData = getInitData();
+  if (!rawInitData) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/miniapp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: rawInitData })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      if (data.session_token) {
+        currentSessionToken = data.session_token;
+        localStorage.setItem("okfans_session_token", data.session_token);
+      }
+    }
+  } catch (err) {
+    console.warn("Silent MiniApp auth warning:", err);
   }
 }
 
@@ -75,6 +111,9 @@ function loadCachedState() {
 async function apiFetch(endpoint, options = {}) {
   const headers = options.headers || {};
   headers["X-Telegram-Init-Data"] = getInitData();
+  if (currentSessionToken) {
+    headers["Authorization"] = `Bearer ${currentSessionToken}`;
+  }
   
   try {
     const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });

@@ -163,56 +163,138 @@ def validate_telegram_init_data(init_data: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Malformed user JSON in initData")
 
 
-# --- AUTHENTICATION DEPENDENCY ---
+# --- AUTHENTICATION DEPENDENCY & PIPELINE ---
 
-async def get_current_user(x_telegram_init_data: Optional[str] = Header(None)) -> dict:
-    if not x_telegram_init_data:
-        # Fallback for browser preview / external link testing
-        owner_user = database.get_user(OWNER_ID)
-        if owner_user:
-            return owner_user
-        return {
-            "user_id": OWNER_ID,
-            "username": "OwnerPreview",
-            "first_name": "VIP Owner",
-            "credits": 10,
-            "is_banned": 0,
-            "starter_completed": 1
-        }
-        
-    try:
-        user_data = validate_telegram_init_data(x_telegram_init_data)
-        tg_user_id = user_data.get("id")
-    except Exception:
-        owner_user = database.get_user(OWNER_ID)
-        if owner_user:
-            return owner_user
-        return {
-            "user_id": OWNER_ID,
-            "username": "OwnerPreview",
-            "first_name": "VIP Owner",
-            "credits": 10,
-            "is_banned": 0,
-            "starter_completed": 1
-        }
+class MiniAppAuthRequest(BaseModel):
+    initData: str
 
+@app.post("/api/auth/miniapp")
+def miniapp_auth(payload: MiniAppAuthRequest):
+    if not payload.initData:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing initData payload")
+
+    user_data = validate_telegram_init_data(payload.initData)
+    tg_user_id = user_data.get("id")
+    
     if not tg_user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Telegram user ID")
-        
-    user = database.get_user(tg_user_id)
-    if not user:
-        # Auto-register new user
-        database.register_user(
-            user_id=tg_user_id,
-            username=user_data.get("username", ""),
-            first_name=user_data.get("first_name", "User")
-        )
-        user = database.get_user(tg_user_id)
-        
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Telegram identity")
+
+    user, is_new = database.upsert_user_by_telegram_id(
+        telegram_user_id=tg_user_id,
+        username=user_data.get("username"),
+        first_name=user_data.get("first_name")
+    )
+    
     if user.get("is_banned", 0) == 1:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is banned")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="ACCOUNT_BANNED: User account is banned.")
+
+    session = database.create_user_session(user_id=tg_user_id, auth_method="MINI_APP")
+    
+    return {
+        "success": True,
+        "session_token": session["session_token"],
+        "expires_at": session["expires_at"],
+        "account_created": is_new,
+        "user": user
+    }
+
+@app.get("/auth/telegram/callback")
+def telegram_oidc_callback(request: Request):
+    """
+    Handles official Telegram OIDC / Login Widget authorization callback.
+    Validates state parameter, client secret, and signature.
+    """
+    params = dict(request.query_params)
+    received_hash = params.pop("hash", None)
+    
+    if not received_hash or "id" not in params:
+        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=AUTH_INVALID")
+
+    data_check_arr = [f"{k}={v}" for k, v in sorted(params.items())]
+    data_check_string = "\n".join(data_check_arr)
+    
+    client_secret = os.getenv("TELEGRAM_LOGIN_CLIENT_SECRET") or BOT_TOKEN
+    secret_key = hashlib.sha256(client_secret.encode("utf-8")).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    
+    if not hmac.compare_digest(computed_hash.lower(), received_hash.lower()):
+        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=AUTH_STATE_MISMATCH")
+
+    try:
+        user_id = int(params.get("id"))
+        username = params.get("username", "")
+        first_name = params.get("first_name", "User")
         
-    return user
+        user, is_new = database.upsert_user_by_telegram_id(
+            telegram_user_id=user_id,
+            username=username,
+            first_name=first_name
+        )
+        
+        session = database.create_user_session(user_id=user_id, auth_method="TELEGRAM_OIDC")
+        return RedirectResponse(url=f"https://okfansbot.vercel.app/?auth=success&session_token={session['session_token']}")
+    except Exception as e:
+        logger.error(f"OIDC Auth error: {e}")
+        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=AUTH_PROVIDER_ERROR")
+
+@app.post("/api/auth/logout")
+def logout(authorization: Optional[str] = Header(None)):
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split("Bearer ", 1)[1].strip()
+        database.revoke_user_session(token)
+    return {"success": True, "message": "Logged out successfully"}
+
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+    x_telegram_init_data: Optional[str] = Header(None)
+) -> dict:
+    session_token = None
+    if authorization and authorization.startswith("Bearer "):
+        session_token = authorization.split("Bearer ", 1)[1].strip()
+
+    if session_token:
+        user = database.get_user_by_session(session_token)
+        if user:
+            if user.get("is_banned", 0) == 1:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="ACCOUNT_BANNED: User account is banned.")
+            return user
+
+    if x_telegram_init_data:
+        try:
+            user_data = validate_telegram_init_data(x_telegram_init_data)
+            tg_user_id = user_data.get("id")
+            if tg_user_id:
+                user, _ = database.upsert_user_by_telegram_id(
+                    telegram_user_id=tg_user_id,
+                    username=user_data.get("username"),
+                    first_name=user_data.get("first_name")
+                )
+                if user.get("is_banned", 0) == 1:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="ACCOUNT_BANNED: User account is banned.")
+                return user
+        except HTTPException as e:
+            if os.getenv("ENVIRONMENT") != "development":
+                raise e
+        except Exception as e:
+            logger.error(f"InitData auth error: {e}")
+
+    if os.getenv("ENVIRONMENT") == "development":
+        owner_user = database.get_user(OWNER_ID)
+        if owner_user:
+            return owner_user
+        return {
+            "user_id": OWNER_ID,
+            "username": "OwnerPreview",
+            "first_name": "VIP Owner",
+            "credits": 10,
+            "is_banned": 0,
+            "starter_completed": 1
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED, 
+        detail="AUTH_REQUIRED: Valid Telegram authentication or session required."
+    )
 
 async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
     if current_user["user_id"] != OWNER_ID:

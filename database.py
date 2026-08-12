@@ -1379,3 +1379,156 @@ def get_system_stats() -> dict:
         return {}
     finally:
         conn.close()
+
+import uuid
+
+def upsert_user_by_telegram_id(telegram_user_id: int, username: str = None, first_name: str = None, last_name: str = None) -> tuple:
+    """
+    Atomically registers or updates user metadata by Telegram User ID.
+    Enforces 1-to-1 mapping between telegram_user_id and user_id.
+    Returns (user_dict, is_new_account).
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE user_id = %s", (telegram_user_id,))
+            existing = cursor.fetchone()
+            
+            clean_username = username or f"user_{telegram_user_id}"
+            clean_fname = first_name or "VIP User"
+            
+            if existing:
+                cursor.execute("""
+                    UPDATE users 
+                    SET username = %s, first_name = %s 
+                    WHERE user_id = %s
+                """, (clean_username, clean_fname, telegram_user_id))
+                
+                cursor.execute("SELECT * FROM users WHERE user_id = %s", (telegram_user_id,))
+                user_data = dict(cursor.fetchone())
+                return user_data, False
+            else:
+                ref_code = f"ref_{telegram_user_id}"
+                if is_postgres_conn(conn):
+                    cursor.execute("""
+                        INSERT INTO users (user_id, username, first_name, credits, ref_code, starter_completed, vip_level)
+                        VALUES (%s, %s, %s, 0, %s, 0, 1)
+                        ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name
+                    """, (telegram_user_id, clean_username, clean_fname, ref_code))
+                else:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO users (user_id, username, first_name, credits, ref_code, starter_completed, vip_level)
+                        VALUES (%s, %s, %s, 0, %s, 0, 1)
+                    """, (telegram_user_id, clean_username, clean_fname, ref_code))
+
+                cursor.execute("SELECT * FROM users WHERE user_id = %s", (telegram_user_id,))
+                row = cursor.fetchone()
+                user_data = dict(row) if row else {"user_id": telegram_user_id, "username": clean_username, "first_name": clean_fname, "credits": 0, "starter_completed": 0, "vip_level": 1}
+                return user_data, True
+    except Exception as e:
+        logging.error(f"Error in upsert_user_by_telegram_id: {e}")
+        u = get_user(telegram_user_id)
+        if u:
+            return u, False
+        return {"user_id": telegram_user_id, "username": username or "User", "first_name": first_name or "User", "credits": 0, "starter_completed": 0, "vip_level": 1}, False
+    finally:
+        conn.close()
+
+def create_user_session(user_id: int, auth_method: str = "MINI_APP") -> dict:
+    """
+    Creates a secure application session token (UUID4) valid for 7 days.
+    """
+    session_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=7)
+    expires_str = expires_at.isoformat()
+    
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            if is_postgres_conn(conn):
+                cursor.execute("""
+                    INSERT INTO user_sessions (session_id, user_id, expires_at, revoked)
+                    VALUES (%s, %s, %s, 0)
+                """, (session_id, user_id, expires_at))
+            else:
+                cursor.execute("""
+                    INSERT INTO user_sessions (session_id, user_id, expires_at, revoked)
+                    VALUES (%s, %s, %s, 0)
+                """, (session_id, user_id, expires_str))
+                
+            return {
+                "session_token": session_id,
+                "user_id": user_id,
+                "expires_at": expires_str,
+                "auth_method": auth_method
+            }
+    except Exception as e:
+        logging.error(f"Error creating user session for {user_id}: {e}")
+        return {
+            "session_token": session_id,
+            "user_id": user_id,
+            "expires_at": expires_str,
+            "auth_method": auth_method
+        }
+    finally:
+        conn.close()
+
+def get_user_by_session(session_id: str) -> dict:
+    """
+    Validates session token and returns the authoritative user dict.
+    Returns None if session is expired, revoked, or non-existent.
+    """
+    if not session_id:
+        return None
+        
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT s.session_id, s.user_id, s.expires_at, s.revoked, u.*
+            FROM user_sessions s
+            JOIN users u ON s.user_id = u.user_id
+            WHERE s.session_id = %s AND s.revoked = 0
+        """, (session_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+            
+        row_dict = dict(row)
+        exp = row_dict.get("expires_at")
+        if isinstance(exp, str):
+            try:
+                exp_dt = datetime.fromisoformat(exp)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp_dt:
+                    return None
+            except Exception:
+                pass
+        return row_dict
+    except Exception as e:
+        logging.error(f"Error validating session {session_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+def revoke_user_session(session_id: str) -> bool:
+    """
+    Revokes an active application session token immediately.
+    """
+    if not session_id:
+        return False
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE user_sessions SET revoked = 1 WHERE session_id = %s", (session_id,))
+            return True
+    except Exception as e:
+        logging.error(f"Error revoking session {session_id}: {e}")
+        return False
+    finally:
+        conn.close()
