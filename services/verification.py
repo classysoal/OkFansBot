@@ -174,3 +174,22 @@ class VerificationService:
             "all_passed": all_passed,
             "requirements": results
         }
+
+class StateMachine:
+    NEW = "NEW"
+    PENDING_VERIFICATION = "PENDING_VERIFICATION"
+    PARTIALLY_VERIFIED = "PARTIALLY_VERIFIED"
+    VERIFIED = "VERIFIED"
+    REWARD_ELIGIBLE = "REWARD_ELIGIBLE"
+    BANNED = "BANNED"
+
+class VerificationManager:
+    @classmethod
+    async def process_verification(cls, user_id: int, active_channels: list, bot) -> tuple:
+        bot_token = getattr(bot, "token", None) or getattr(bot, "_token", None)
+        res = await VerificationService.evaluate_user_verification(user_id, active_channels, bot_token)
+        results = res["requirements"]
+        passed_count = res["passed_count"]
+        total_required = res["total_required"]
+        still_missing = [r for r in results if r.get("application_result") != ApplicationResult.PASS]
+        return results, passed_count, total_required, still_missing
