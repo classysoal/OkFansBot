@@ -73,6 +73,32 @@ function checkUrlAuthStatus() {
     showToast("Telegram Login error: " + params.get("auth_error"), "error", "⚠️");
     triggerHaptic("error");
   }
+
+  checkAuthenticationState();
+}
+
+function checkAuthenticationState() {
+  const hasInitData = Boolean(getInitData());
+  const hasSession = Boolean(currentSessionToken);
+  const overlay = document.getElementById("auth-overlay");
+
+  if (!hasInitData && !hasSession) {
+    if (overlay) overlay.style.display = "flex";
+  } else {
+    if (overlay) overlay.style.display = "none";
+  }
+}
+
+function loginWithTelegram() {
+  triggerHaptic("success");
+  if (tg && tg.initData) {
+    authenticateMiniApp().then(() => {
+      checkAuthenticationState();
+      loadDashboardData();
+    });
+  } else {
+    window.location.href = "https://t.me/OkFansBot/app";
+  }
 }
 
 async function authenticateMiniApp() {

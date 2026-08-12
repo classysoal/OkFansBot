@@ -11,6 +11,18 @@
 </head>
 <body>
   <div id="app" class="app-container">
+    <!-- Unauthenticated Telegram Login Landing Overlay -->
+    <div id="auth-overlay" class="auth-overlay" style="display: none;">
+      <div class="auth-card">
+        <div class="auth-icon">✈️</div>
+        <h2>OkFans VIP Club</h2>
+        <p>Sign in securely with Telegram to access your VIP rewards, credit balance, and Quest verification center.</p>
+        <button onclick="loginWithTelegram()" class="btn-primary" style="margin-top: 18px; padding: 14px; font-size: 15px;">
+          🔑 Continue with Telegram
+        </button>
+      </div>
+    </div>
+
     <!-- Top Header Bar -->
     <header class="app-header">
       <div class="user-badge">
