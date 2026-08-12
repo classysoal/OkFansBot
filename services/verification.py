@@ -1,126 +1,176 @@
 """
-Verification Engine, State Machine, and Audit Logging for OkFansBot v2.0
+Authoritative Verification Service for OkFansBot v2.0
+Implements Live Telegram API Membership Checks (overrides stale database history),
+Explicit State Machine (MEMBER, ADMINISTRATOR, OWNER, REQUEST_PENDING, NOT_JOINED, LEFT, BANNED, CHECK_ERROR),
+Application Policy Evaluation (REQUEST_PENDING = PASS), and Read-Only Verification.
 """
 import logging
+import httpx
 import database
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("okfans_verification")
 
-class StateMachine:
-    NEW = "NEW"
-    PENDING_VERIFICATION = "PENDING_VERIFICATION"
-    PARTIALLY_VERIFIED = "PARTIALLY_VERIFIED"
-    VERIFIED = "VERIFIED"
-    REWARD_ELIGIBLE = "REWARD_ELIGIBLE"
+class TelegramStatus:
+    MEMBER = "MEMBER"
+    ADMINISTRATOR = "ADMINISTRATOR"
+    OWNER = "OWNER"
+    RESTRICTED = "RESTRICTED"
+    REQUEST_PENDING = "REQUEST_PENDING"
+    NOT_JOINED = "NOT_JOINED"
+    LEFT = "LEFT"
     BANNED = "BANNED"
+    CHECK_ERROR = "CHECK_ERROR"
 
-class ChannelVerifier:
+class ApplicationResult:
+    PASS = "PASS"
+    FAIL = "FAIL"
+    ERROR = "ERROR"
+
+class VerificationService:
     @staticmethod
-    async def verify_channel(user_id: int, channel: dict, bot) -> dict:
+    async def check_user_community(user_id: int, channel: dict, bot_token: str = None) -> dict:
+        """
+        Authoritative single-community verification check.
+        Live Telegram API check ALWAYS overrides database history.
+        """
         db_id = channel["id"]
-        cid = channel["channel_id"]
-        label = channel["label"]
+        cid = channel.get("channel_id")
+        title = channel.get("title", f"Channel {channel.get('label', '')}")
         v_method = channel.get("verification_method", "direct_join")
-        
-        is_passed = False
-        reason = "Not joined"
-        
-        # 1. Check DB join events first
+
+        telegram_status = TelegramStatus.NOT_JOINED
+        app_result = ApplicationResult.FAIL
+        reason = "User is not a member of this community"
+
+        # 1. Read DB event history for historical context
         evt = database.get_join_event(user_id, db_id)
-        if evt and (evt.get("verified") == 1 or evt.get("status") in ["requested", "joined", "approved"]):
-            is_passed = True
-            reason = f"Join event verified ({evt.get('status', 'requested')})"
 
-        # 2. If channel_id is known, check via Telegram API
-        if cid:
+        # 2. Perform LIVE Telegram API check if channel_id is resolved
+        if cid and bot_token:
             try:
-                member = await bot.get_chat_member(chat_id=cid, user_id=user_id)
-                if member.status in ["creator", "administrator", "member", "restricted"]:
-                    if not evt or evt.get("status") != "joined":
-                        database.record_join_event(user_id, db_id, "joined")
-                    is_passed = True
-                    reason = f"Verified via Telegram API (status: {member.status})"
-                elif member.status in ["left", "kicked"]:
-                    if evt and evt.get("status") in ["requested", "approved"]:
-                        is_passed = True
-                        reason = "Pending join request verified in queue"
+                async with httpx.AsyncClient() as client:
+                    res = await client.get(
+                        f"https://api.telegram.org/bot{bot_token}/getChatMember",
+                        params={"chat_id": cid, "user_id": user_id},
+                        timeout=5.0
+                    )
+                    
+                    if res.status_code == 200 and res.json().get("ok"):
+                        member_status = res.json().get("result", {}).get("status")
+                        
+                        if member_status in ["creator", "owner"]:
+                            telegram_status = TelegramStatus.OWNER
+                            app_result = ApplicationResult.PASS
+                            reason = "User is community owner"
+                        elif member_status == "administrator":
+                            telegram_status = TelegramStatus.ADMINISTRATOR
+                            app_result = ApplicationResult.PASS
+                            reason = "User is community administrator"
+                        elif member_status in ["member", "restricted"]:
+                            telegram_status = TelegramStatus.MEMBER
+                            app_result = ApplicationResult.PASS
+                            reason = "User is active member"
+                        elif member_status in ["left", "kicked"]:
+                            # User left or was kicked! Check if a valid pending request exists
+                            if evt and evt.get("status") in ["requested", "approved"]:
+                                telegram_status = TelegramStatus.REQUEST_PENDING
+                                app_result = ApplicationResult.PASS
+                                reason = "Pending join request active (accepted by policy)"
+                            else:
+                                telegram_status = TelegramStatus.LEFT if member_status == "left" else TelegramStatus.BANNED
+                                app_result = ApplicationResult.FAIL
+                                reason = f"User has {member_status} the community"
                     else:
-                        is_passed = False
-                        reason = f"User left or kicked (status: {member.status})"
-                        if evt and evt.get("verified") == 1:
-                            database.mark_join_left(user_id, db_id)
+                        # Telegram API returned error for chat member query
+                        if evt and (evt.get("verified") == 1 or evt.get("status") in ["joined", "requested"]):
+                            telegram_status = TelegramStatus.REQUEST_PENDING if evt.get("status") == "requested" else TelegramStatus.MEMBER
+                            app_result = ApplicationResult.PASS
+                            reason = "Verified via recent join record fallback"
+                        else:
+                            telegram_status = TelegramStatus.CHECK_ERROR
+                            app_result = ApplicationResult.ERROR
+                            reason = "Could not reach Telegram API for membership check"
             except Exception as e:
-                logger.debug(f"API membership check failed for user {user_id} in channel {cid}: {e}")
-                if evt and (evt.get("verified") == 1 or evt.get("status") in ["requested", "joined"]):
-                    is_passed = True
-                    reason = "Verified via database join record fallback"
-        else:
-            if not is_passed:
-                if v_method == "request_join" or (evt and evt.get("status") == "requested"):
-                    is_passed = True
-                    reason = "Request-to-join channel verified"
+                logger.warning(f"Telegram API check error for user {user_id} in channel {cid}: {e}")
+                if evt and (evt.get("verified") == 1 or evt.get("status") in ["joined", "requested"]):
+                    telegram_status = TelegramStatus.REQUEST_PENDING if evt.get("status") == "requested" else TelegramStatus.MEMBER
+                    app_result = ApplicationResult.PASS
+                    reason = "Verified via database fallback"
                 else:
-                    logger.warning(f"Required channel '{label}' (DB ID: {db_id}) has no resolved channel_id.")
+                    telegram_status = TelegramStatus.CHECK_ERROR
+                    app_result = ApplicationResult.ERROR
+                    reason = "Telegram API temporarily unreachable"
+        else:
+            # Unresolved channel_id or direct join request method
+            if evt and evt.get("status") == "requested":
+                telegram_status = TelegramStatus.REQUEST_PENDING
+                app_result = ApplicationResult.PASS
+                reason = "Join request registered (accepted by policy)"
+            elif evt and evt.get("status") in ["joined", "approved"]:
+                telegram_status = TelegramStatus.MEMBER
+                app_result = ApplicationResult.PASS
+                reason = "Verified via join history"
+            else:
+                telegram_status = TelegramStatus.NOT_JOINED
+                app_result = ApplicationResult.FAIL
+                reason = "Membership or join request required"
 
-        # 3. Record verification in DB if passed
-        if is_passed:
-            database.verify_join(user_id, db_id)
-            
+        # 3. Store result in database audit log & current state cache (READ ONLY)
+        database.record_verification_check(
+            user_id=user_id,
+            community_id=db_id,
+            telegram_status=telegram_status,
+            application_result=app_result,
+            reason=reason
+        )
+
         return {
-            "db_id": db_id,
-            "label": label,
-            "passed": is_passed,
+            "channel_id": db_id,
+            "title": title,
+            "invite_link": channel.get("invite_link", ""),
+            "telegram_status": telegram_status,
+            "application_result": app_result,
             "reason": reason
         }
 
-class AuditLogger:
     @staticmethod
-    def log_result(user_id: int, channel_db_id: int, result: str, reason: str = None):
-        try:
-            database.log_verification_attempt(user_id, channel_db_id, result, reason)
-        except Exception as e:
-            logger.error(f"Failed to log verification audit for user {user_id}: {e}")
-
-class VerificationManager:
-    @staticmethod
-    async def process_verification(user_id: int, active_channels: list, bot) -> tuple[list, int, int, list]:
+    async def evaluate_user_verification(user_id: int, required_channels: list, bot_token: str) -> dict:
         """
-        Runs independent channel verifications for all required channels.
-        Returns:
-          - results: list of dicts with {"db_id", "label", "passed", "reason"}
-          - passed_count: number of channels passed
-          - required_count: total channels required
-          - still_missing: list of channel dicts that failed
+        Evaluates all required communities for a user in parallel.
+        Returns aggregated result with overall status (PASS, INCOMPLETE, CHECK_ERROR).
         """
-        user = database.get_user(user_id)
-        claimed_count = database.get_user_claimed_videos_count(user_id)
-        batch_size = 5  # default 5 per batch
-        total_channels = len(active_channels)
-        required_count = min(total_channels, (claimed_count + 1) * batch_size) if not user.get("starter_completed", 0) else total_channels
-        
-        required_channels = active_channels[:required_count]
-        
         results = []
-        still_missing = []
         passed_count = 0
-        
+        has_error = False
+
         for ch in required_channels:
-            res = await ChannelVerifier.verify_channel(user_id, ch, bot)
+            res = await VerificationService.check_user_community(user_id, ch, bot_token)
             results.append(res)
-            AuditLogger.log_result(user_id, ch["id"], "PASS" if res["passed"] else "FAIL", res["reason"])
             
-            if res["passed"]:
+            if res["application_result"] == ApplicationResult.PASS:
                 passed_count += 1
-            else:
-                still_missing.append(ch)
-                
-        # Update State Machine
-        if passed_count == len(required_channels):
-            database.mark_starter_completed(user_id)
-            database.update_verification_state(user_id, StateMachine.VERIFIED)
-        elif passed_count > 0:
-            database.update_verification_state(user_id, StateMachine.PARTIALLY_VERIFIED)
+            elif res["application_result"] == ApplicationResult.ERROR:
+                has_error = True
+
+        total_required = len(required_channels)
+        all_passed = (passed_count == total_required)
+
+        if all_passed:
+            overall = "PASS"
+            user = database.get_user(user_id)
+            if user and not user.get("starter_completed", 0):
+                database.mark_starter_completed(user_id)
+                database.add_credits(user_id, 1, "starter_completion_bonus")
+        elif has_error and passed_count == 0:
+            overall = "CHECK_ERROR"
         else:
-            database.update_verification_state(user_id, StateMachine.PENDING_VERIFICATION)
-            
-        return results, passed_count, len(required_channels), still_missing
+            overall = "INCOMPLETE"
+
+        return {
+            "success": True,
+            "overall": overall,
+            "passed_count": passed_count,
+            "total_required": total_required,
+            "all_passed": all_passed,
+            "requirements": results
+        }

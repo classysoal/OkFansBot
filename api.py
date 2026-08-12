@@ -46,10 +46,13 @@ app = FastAPI(
     description="Stateless, secure REST API engine for Telegram Mini App and Admin Control Panel."
 )
 
-# Enable CORS for Mini App and Web Dashboard
+allowed_origins = ["https://okfansbot.vercel.app"]
+if os.getenv("ENVIRONMENT") == "development":
+    allowed_origins.append("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -463,82 +466,24 @@ async def run_verification_check(current_user: dict = Depends(get_current_user))
     user_id = current_user["user_id"]
     active_channels = database.get_required_channels()
     
-    import httpx
     claimed_count = database.get_user_claimed_videos_count(user_id)
     batch_size = config.get("channels_per_verification_batch", 5)
     total_channels = len(active_channels)
     req_count = min(total_channels, (claimed_count + 1) * batch_size) if not current_user.get("starter_completed", 0) else total_channels
     required_channels = active_channels[:req_count]
     
-    passed_count = 0
-    channel_results = []
-    
-    async with httpx.AsyncClient() as client:
-        for ch in required_channels:
-            db_id = ch["id"]
-            cid = ch["channel_id"]
-            label = ch["label"]
-            v_method = ch.get("verification_method", "direct_join")
-            
-            is_passed = False
-            reason = "Not joined"
-            
-            evt = database.get_join_event(user_id, db_id)
-            if evt and (evt.get("verified") == 1 or evt.get("status") in ["requested", "joined", "approved"]):
-                is_passed = True
-                reason = "Verified via join event"
-                
-            if cid:
-                try:
-                    res = await client.get(
-                        f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
-                        params={"chat_id": cid, "user_id": user_id},
-                        timeout=5.0
-                    )
-                    if res.status_code == 200 and res.json().get("ok"):
-                        st = res.json().get("result", {}).get("status")
-                        if st in ["creator", "administrator", "member", "restricted"]:
-                            is_passed = True
-                            reason = f"Verified via Telegram API (status: {st})"
-                            database.record_join_event(user_id, db_id, "joined")
-                        elif st in ["left", "kicked"]:
-                            if evt and evt.get("status") in ["requested", "approved"]:
-                                is_passed = True
-                            else:
-                                is_passed = False
-                                reason = f"User left channel ({st})"
-                except Exception as e:
-                    logger.debug(f"API check error for ch {cid}: {e}")
-            else:
-                if v_method == "request_join" or (evt and evt.get("status") == "requested"):
-                    is_passed = True
-                    reason = "Request to join channel verified"
-
-            if is_passed:
-                database.verify_join(user_id, db_id)
-                passed_count += 1
-                
-            channel_results.append({
-                "id": db_id,
-                "title": ch["title"],
-                "passed": is_passed,
-                "status": "COMPLETED" if is_passed else ("PENDING" if (evt and evt.get("status") == "requested") else "ACTION_REQUIRED")
-            })
-
-    all_passed = (passed_count == len(required_channels))
-    if all_passed and not current_user.get("starter_completed", 0):
-        database.mark_starter_completed(user_id)
-        database.add_credits(user_id, 1, "starter_completion_bonus")
-        
+    res = await VerificationService.evaluate_user_verification(user_id, required_channels, BOT_TOKEN)
     updated_user = database.get_user(user_id)
+    
     return {
         "success": True,
-        "passed_count": passed_count,
-        "total_required": len(required_channels),
-        "all_passed": all_passed,
-        "channels": channel_results,
+        "overall": res["overall"],
+        "passed_count": res["passed_count"],
+        "total_required": res["total_required"],
+        "all_passed": res["all_passed"],
+        "requirements": res["requirements"],
         "new_credits": updated_user.get("credits", 0) if updated_user else 0,
-        "message": "🎉 All required channel steps completed! Starter bonus unlocked!" if all_passed else f"Verified {passed_count}/{len(required_channels)} channels. Please complete remaining steps!"
+        "message": "🎉 All required channel steps completed! Starter bonus unlocked!" if res["all_passed"] else f"Verified {res['passed_count']}/{res['total_required']} communities. Complete remaining steps!"
     }
 
 # --- ADMIN CONTROL PANEL ENDPOINTS ---

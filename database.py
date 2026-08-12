@@ -978,6 +978,28 @@ def verify_join(user_id: int, channel_db_id: int) -> bool:
     finally:
         conn.close()
 
+def record_verification_check(user_id: int, community_id: int, telegram_status: str, application_result: str, reason: str = None) -> bool:
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            if is_postgres_conn(conn):
+                cursor.execute("""
+                    INSERT INTO verification_logs (user_id, channel_db_id, result, reason)
+                    VALUES (%s, %s, %s, %s)
+                """, (user_id, community_id, application_result, f"{telegram_status}: {reason or ''}"))
+            else:
+                cursor.execute("""
+                    INSERT INTO verification_logs (user_id, channel_db_id, result, reason)
+                    VALUES (%s, %s, %s, %s)
+                """, (user_id, community_id, application_result, f"{telegram_status}: {reason or ''}"))
+            return True
+    except Exception as e:
+        logging.error(f"Error recording verification check log: {e}")
+        return False
+    finally:
+        conn.close()
+
 # --- REFERRAL LOGIC ---
 
 def add_referral_credits_if_eligible(referred_user_id: int, referral_credits: int) -> tuple:

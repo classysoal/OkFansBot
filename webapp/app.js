@@ -1,7 +1,7 @@
 /**
  * OkFans VIP Club Mini App JavaScript Engine
  * Single Aggregated Request (/api/dashboard), Skeleton Loaders, Local Caching, Error Retry States.
- * Sleek Toast Notification System (Zero Browser Alert Boxes) + Native Haptic Feedback.
+ * Explicit Verification State Badges (MEMBER, REQUEST_PENDING, LEFT, CHECK_ERROR).
  */
 
 const tg = window.Telegram?.WebApp;
@@ -17,13 +17,8 @@ document.addEventListener("DOMContentLoaded", () => {
     tg.ready();
   }
   
-  // Check for URL auth status
   checkUrlAuthStatus();
-
-  // 1. Instantly render cached state if available
   loadCachedState();
-  
-  // 2. Fetch authoritative live aggregated dashboard
   loadDashboardData();
 });
 
@@ -131,7 +126,7 @@ function renderDashboard(data, isFromCache = false) {
 
   // 3. Quest / Verification Center
   document.getElementById("questProgressBadge").textContent = `${verif.completed_count || 0} / ${verif.total_required || 0} Completed`;
-  renderVerificationList(verif.channels || []);
+  renderVerificationList(verif.requirements || verif.channels || []);
 
   // 4. VIP Tiers Progress
   document.getElementById("currentVipTitle").textContent = vip.title || "Novice VIP";
@@ -155,34 +150,43 @@ function renderDashboard(data, isFromCache = false) {
   renderActivityList(act);
 }
 
-function renderVerificationList(channels) {
+function renderVerificationList(requirements) {
   const container = document.getElementById("channelList");
   if (!container) return;
 
-  if (channels.length === 0) {
+  if (!requirements || requirements.length === 0) {
     container.innerHTML = `<div style="color:#10b981; font-weight:700; padding:12px;">✅ All VIP Verification Quests Completed!</div>`;
     return;
   }
 
   let html = "";
-  channels.forEach((ch, idx) => {
+  requirements.forEach((req, idx) => {
     let badgeClass = "badge-warning";
-    let badgeText = "Action Required";
-    if (ch.status === "COMPLETED") {
+    let badgeText = "○ Action Required";
+    
+    const status = req.telegram_status || req.status;
+
+    if (status === "MEMBER" || status === "ADMINISTRATOR" || status === "OWNER") {
       badgeClass = "badge-success";
-      badgeText = "✓ Completed";
-    } else if (ch.status === "PENDING") {
+      badgeText = "✓ Member (Completed)";
+    } else if (status === "REQUEST_PENDING") {
       badgeClass = "badge-info";
-      badgeText = "⏳ Pending Request";
+      badgeText = "⏳ Request Pending (Accepted by Policy)";
+    } else if (status === "LEFT") {
+      badgeClass = "badge-warning";
+      badgeText = "↻ Membership No Longer Active";
+    } else if (status === "CHECK_ERROR") {
+      badgeClass = "badge-warning";
+      badgeText = "⚠️ Unable to Verify Right Now";
     }
 
     html += `
       <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:10px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <div style="font-weight:700; font-size:13px;">${idx+1}. ${ch.title}</div>
+          <div style="font-weight:700; font-size:13px;">${idx+1}. ${req.title}</div>
           <span class="badge ${badgeClass}" style="margin-top:4px; display:inline-block;">${badgeText}</span>
         </div>
-        <button onclick="openChannelLink('${ch.invite_link}')" class="btn-secondary" style="cursor:pointer;">Open</button>
+        <button onclick="openChannelLink('${req.invite_link || '#'}')" class="btn-secondary" style="cursor:pointer;">Open</button>
       </div>
     `;
   });
@@ -255,6 +259,7 @@ async function checkVerification() {
       triggerHaptic("error");
       showToast(res.message, "error", "🔍");
     }
+    renderVerificationList(res.requirements || []);
     loadDashboardData();
   } catch (err) {
     triggerHaptic("error");
