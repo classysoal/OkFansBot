@@ -3,6 +3,7 @@ import { renderLoading, renderError, renderEmpty, renderSuccess, skeletonCard } 
 import TelegramSDK from '../telegram.js';
 import { showToast } from '../components/toast.js';
 import Cache from '../cache.js';
+import Router from '../router.js';
 
 let _container = null;
 
@@ -65,6 +66,17 @@ function render(data) {
   }
 
   const html = `
+    ${isCompleted ? `
+      <div class="card mb-3 p-4 text-center" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1.5px solid rgba(16, 185, 129, 0.4);">
+        <div class="badge badge-success mb-2 font-size-xs">✓ Verification Complete</div>
+        <h2 class="font-size-lg font-weight-bold text-primary mb-1">Starter Quests Completed!</h2>
+        <p class="text-secondary font-size-sm mb-3">Your account is fully verified. You can now claim your VIP video rewards.</p>
+        <button id="btn-post-verify-get-video" class="btn btn-gold w-100 font-size-md" style="min-height: 48px;">
+          🎬 GET VIDEO NOW ↗
+        </button>
+      </div>
+    ` : ''}
+
     <div class="card mb-3">
       <div class="d-flex justify-between align-center mb-2">
         <h2 class="section-title mb-0">Channel Quests</h2>
@@ -108,6 +120,11 @@ function render(data) {
   
   renderSuccess(_container, html);
   
+  // Post verification action listener
+  document.getElementById('btn-post-verify-get-video')?.addEventListener('click', () => {
+    Router.navigate('home');
+  });
+
   // Helper for telegram SDK channel open
   window.openTelegramChannel = (url) => {
     if (!url || url === '#') return;
