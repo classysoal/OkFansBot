@@ -46,17 +46,24 @@ app = FastAPI(
     description="Stateless, secure REST API engine for Telegram Mini App and Admin Control Panel."
 )
 
-allowed_origins = ["https://okfansbot.vercel.app"]
+allowed_origins = [
+    "https://okfanbot.vercel.app",
+    "https://okfansbot.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
 if os.getenv("ENVIRONMENT") == "development":
     allowed_origins.append("*")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 if os.path.exists("webapp"):
     app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")
@@ -83,7 +90,7 @@ def telegram_widget_auth(request: Request):
     received_hash = params.pop("hash", None)
     
     if not received_hash or "id" not in params:
-        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=missing_hash")
+        return RedirectResponse(url="https://okfanbot.vercel.app/?auth_error=missing_hash")
 
     data_check_arr = [f"{k}={v}" for k, v in sorted(params.items())]
     data_check_string = "\n".join(data_check_arr)
@@ -92,7 +99,7 @@ def telegram_widget_auth(request: Request):
     computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
     
     if not hmac.compare_digest(computed_hash.lower(), received_hash.lower()):
-        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=invalid_signature")
+        return RedirectResponse(url="https://okfanbot.vercel.app/?auth_error=invalid_signature")
         
     try:
         user_id = int(params.get("id"))
@@ -103,10 +110,11 @@ def telegram_widget_auth(request: Request):
         if not user:
             database.register_user(user_id, username, first_name)
             
-        return RedirectResponse(url=f"https://okfansbot.vercel.app/?auth=success&user_id={user_id}")
+        return RedirectResponse(url=f"https://okfanbot.vercel.app/?auth=success&user_id={user_id}")
     except Exception as e:
         logger.error(f"Widget auth error: {e}")
-        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=exception")
+        return RedirectResponse(url="https://okfanbot.vercel.app/?auth_error=exception")
+
 
 # --- TELEGRAM INITDATA HMAC VALIDATION ---
 
@@ -208,7 +216,7 @@ def telegram_oidc_callback(request: Request):
     received_hash = params.pop("hash", None)
     
     if not received_hash or "id" not in params:
-        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=AUTH_INVALID")
+        return RedirectResponse(url="https://okfanbot.vercel.app/?auth_error=AUTH_INVALID")
 
     data_check_arr = [f"{k}={v}" for k, v in sorted(params.items())]
     data_check_string = "\n".join(data_check_arr)
@@ -218,7 +226,7 @@ def telegram_oidc_callback(request: Request):
     computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
     
     if not hmac.compare_digest(computed_hash.lower(), received_hash.lower()):
-        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=AUTH_STATE_MISMATCH")
+        return RedirectResponse(url="https://okfanbot.vercel.app/?auth_error=AUTH_STATE_MISMATCH")
 
     try:
         user_id = int(params.get("id"))
@@ -232,10 +240,11 @@ def telegram_oidc_callback(request: Request):
         )
         
         session = database.create_user_session(user_id=user_id, auth_method="TELEGRAM_OIDC")
-        return RedirectResponse(url=f"https://okfansbot.vercel.app/?auth=success&session_token={session['session_token']}")
+        return RedirectResponse(url=f"https://okfanbot.vercel.app/?auth=success&session_token={session['session_token']}")
     except Exception as e:
         logger.error(f"OIDC Auth error: {e}")
-        return RedirectResponse(url="https://okfansbot.vercel.app/?auth_error=AUTH_PROVIDER_ERROR")
+        return RedirectResponse(url="https://okfanbot.vercel.app/?auth_error=AUTH_PROVIDER_ERROR")
+
 
 @app.post("/api/auth/logout")
 def logout(authorization: Optional[str] = Header(None)):
