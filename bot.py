@@ -1110,25 +1110,41 @@ async def admin_give_credits_command(update: Update, context: ContextTypes.DEFAU
     if update.effective_user.id != OWNER_ID:
         return
 
-    target_user = resolve_target_user_from_update(update, context)
+    target_user = None
+    amount_arg = None
+
+    if context.args:
+        if len(context.args) == 1:
+            try:
+                amount_arg = context.args[0]
+                amount = int(amount_arg)
+                target_user = database.get_user(OWNER_ID)
+            except ValueError:
+                pass
+        elif len(context.args) >= 2:
+            amount_arg = context.args[1]
+
+    if not target_user:
+        target_user = resolve_target_user_from_update(update, context)
+        if update.effective_message and update.effective_message.reply_to_message and context.args:
+            amount_arg = context.args[0]
+
     if not target_user:
         await update.effective_chat.send_message(
-            "⚠️ <b>User Not Found</b>\n\nUsage:\n• <code>/givecredits [user_id or @username] [amount]</code>\n• Or reply to a user message: <code>/givecredits [amount]</code>",
+            "⚠️ <b>Credit Adjustment Usage</b>\n\n"
+            "• <code>/addcredits [amount]</code> (adds directly to your owner balance)\n"
+            "• <code>/addcredits [user_id or @username] [amount]</code>\n"
+            "• Or reply to a user message: <code>/addcredits [amount]</code>",
             parse_mode="HTML"
         )
         return
-
-    amount_arg = None
-    if update.effective_message and update.effective_message.reply_to_message and context.args:
-        amount_arg = context.args[0]
-    elif len(context.args) >= 2:
-        amount_arg = context.args[1]
 
     try:
         amount = int(amount_arg)
     except (TypeError, ValueError):
         await update.effective_chat.send_message("⚠️ Amount must be an integer number.")
         return
+
 
     target_uid = target_user["user_id"]
     if database.add_credits(target_uid, amount, "admin_adjust"):
@@ -1482,7 +1498,8 @@ def main():
     application.add_handler(CommandHandler("broadcast", admin_broadcast_command))
     application.add_handler(CommandHandler("addvideo", admin_add_video_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
-    application.add_handler(CommandHandler("givecredits", admin_give_credits_command))
+    application.add_handler(CommandHandler(["givecredits", "addcredits"], admin_give_credits_command))
+
     application.add_handler(CommandHandler("ban", admin_ban_command))
     application.add_handler(CommandHandler("unban", admin_unban_command))
     application.add_handler(CommandHandler("maintenance", admin_toggle_maintenance))
