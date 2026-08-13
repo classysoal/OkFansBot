@@ -14,7 +14,7 @@ from typing import Optional
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request, status, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel

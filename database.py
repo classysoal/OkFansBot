@@ -219,10 +219,17 @@ def init_db():
             ledger_id SERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL REFERENCES users(user_id),
             amount INT NOT NULL,
+            balance_after INT DEFAULT 0,
             reason VARCHAR(50) NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        try:
+            cursor.execute("ALTER TABLE credit_ledger ADD COLUMN IF NOT EXISTS balance_after INT DEFAULT 0;")
+        except Exception:
+            pass
+
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS admin_audit_logs (
@@ -514,10 +521,17 @@ def init_db():
             ledger_id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(user_id),
             amount INTEGER NOT NULL,
+            balance_after INTEGER DEFAULT 0,
             reason TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        try:
+            cursor.execute("ALTER TABLE credit_ledger ADD COLUMN balance_after INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS admin_audit_logs (
