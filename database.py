@@ -1222,7 +1222,7 @@ def list_videos_paginated(offset: int, limit: int) -> list:
         conn.close()
 
 
-def get_next_reward_video(user_id: int, vault: str, max_limit: int = None) -> dict:
+def get_next_reward_video(user_id: int, vault: str = None, max_limit: int = None) -> dict:
     conn = get_db_connection()
     try:
         with conn:
@@ -1233,8 +1233,15 @@ def get_next_reward_video(user_id: int, vault: str, max_limit: int = None) -> di
                 return None
             pointer = user['vault_pointer']
 
-            cursor.execute("SELECT * FROM videos WHERE vault = %s AND is_active = 1 ORDER BY video_id ASC", (vault,))
-            all_videos = [dict(row) for row in cursor.fetchall()]
+            all_videos = []
+            if vault:
+                cursor.execute("SELECT * FROM videos WHERE vault = %s AND is_active = 1 ORDER BY video_id ASC", (vault,))
+                all_videos = [dict(row) for row in cursor.fetchall()]
+
+            if not all_videos:
+                cursor.execute("SELECT * FROM videos WHERE is_active = 1 ORDER BY video_id ASC")
+                all_videos = [dict(row) for row in cursor.fetchall()]
+
             if max_limit and isinstance(max_limit, int) and max_limit > 0:
                 all_videos = all_videos[:max_limit]
 
@@ -1252,21 +1259,14 @@ def get_next_reward_video(user_id: int, vault: str, max_limit: int = None) -> di
             else:
                 selected = all_videos[pointer % len(all_videos)]
 
-            if selected:
-                try:
-                    if is_postgres_conn(conn):
-                        cursor.execute("INSERT INTO user_video_history (user_id, video_id) VALUES (%s, %s) ON CONFLICT (user_id, video_id) DO NOTHING", (user_id, selected['video_id']))
-                    else:
-                        cursor.execute("INSERT OR IGNORE INTO user_video_history (user_id, video_id) VALUES (%s, %s)", (user_id, selected['video_id']))
-                except Exception:
-                    pass
-
+            # NOTE: Defer user_video_history insertion to record_video_delivery after HTTP 200 delivery
             return selected
     except Exception as e:
         logging.error(f"Error selecting reward video for user {user_id}: {e}")
         return None
     finally:
         conn.close()
+
 
 def is_postgres_conn(conn) -> bool:
     return not isinstance(conn, SQLiteConnectionWrapper)
@@ -1280,6 +1280,15 @@ def record_video_delivery(user_id: int, video_id: int, chat_id: int, message_id:
             cursor = conn.cursor()
             expiry_str = expiry_at.isoformat() if isinstance(expiry_at, datetime) else str(expiry_at)
             
+            # Record seen history ONLY on verified delivery
+            try:
+                if is_postgres_conn(conn):
+                    cursor.execute("INSERT INTO user_video_history (user_id, video_id) VALUES (%s, %s) ON CONFLICT (user_id, video_id) DO NOTHING", (user_id, video_id))
+                else:
+                    cursor.execute("INSERT OR IGNORE INTO user_video_history (user_id, video_id) VALUES (%s, %s)", (user_id, video_id))
+            except Exception as e:
+                logging.warning(f"Note on user_video_history insert: {e}")
+
             if is_postgres_conn(conn):
                 cursor.execute("""
                     INSERT INTO video_deliveries (user_id, video_id, chat_id, message_id, expiry_at, status)
@@ -1298,6 +1307,7 @@ def record_video_delivery(user_id: int, video_id: int, chat_id: int, message_id:
         return None
     finally:
         conn.close()
+
 
 def get_pending_deletions() -> list:
     conn = get_db_connection()

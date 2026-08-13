@@ -833,7 +833,120 @@ def update_settings(payload: dict, current_user: dict = Depends(get_current_user
     ok = database.save_user_settings(user_id, current_settings)
     return {"success": ok, "settings": current_settings}
 
+# --- ADMIN DIAGNOSTIC ENDPOINTS ---
+
+@app.get("/api/admin/reward-eligibility")
+def get_admin_reward_eligibility(user_id: int, admin: dict = Depends(get_admin_user)):
+    """
+    Read-only diagnostic breakdown of reward inventory and eligibility for a user.
+    """
+    user = database.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
+
+    conn = database.get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) as total FROM videos")
+        row = cursor.fetchone()
+        catalog_total = row['total'] if isinstance(row, dict) else (row[0] if row else 0)
+
+        cursor.execute("SELECT COUNT(*) as active FROM videos WHERE is_active = 1")
+        row = cursor.fetchone()
+        active_total = row['active'] if isinstance(row, dict) else (row[0] if row else 0)
+
+        cursor.execute("SELECT vault, COUNT(*) as cnt FROM videos WHERE is_active = 1 GROUP BY vault")
+        vault_rows = cursor.fetchall()
+        vault_breakdown = {r['vault'] if isinstance(r, dict) else r[0]: r['cnt'] if isinstance(r, dict) else r[1] for r in vault_rows}
+
+        cursor.execute("SELECT COUNT(*) as hist FROM user_video_history WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        history_total = row['hist'] if isinstance(row, dict) else (row[0] if row else 0)
+
+        cursor.execute("""
+            SELECT COUNT(*) as unseen FROM videos 
+            WHERE is_active = 1 
+            AND video_id NOT IN (SELECT video_id FROM user_video_history WHERE user_id = %s)
+        """, (user_id,))
+        row = cursor.fetchone()
+        unseen_total = row['unseen'] if isinstance(row, dict) else (row[0] if row else 0)
+
+        unlocked_limit = config.get("unlocked_video_limit", 50)
+        vip_info = database.get_user_vip_tier_info(user_id)
+
+        return {
+            "user": {
+                "user_id": user["user_id"],
+                "first_name": user.get("first_name"),
+                "credits": user.get("credits", 0),
+                "starter_completed": bool(user.get("starter_completed", 0)),
+                "vip_level": vip_info["level"],
+                "credit_cost": vip_info["credit_cost"],
+                "bundle_size": vip_info["bundle_size"]
+            },
+            "catalog": {
+                "total": catalog_total,
+                "active": active_total,
+                "unlocked_limit": unlocked_limit,
+                "vault_breakdown": vault_breakdown
+            },
+            "history": {
+                "user_history_count": history_total
+            },
+            "eligibility": {
+                "eligible_unseen_total": unseen_total,
+                "is_eligible_for_reward": (unseen_total > 0 and user.get("credits", 0) >= vip_info["credit_cost"] and bool(user.get("starter_completed", 0)))
+            }
+        }
+    finally:
+        conn.close()
+
+@app.get("/api/admin/daily-diagnostic")
+def get_admin_daily_diagnostic(user_id: int, admin: dict = Depends(get_admin_user)):
+    """
+    Read-only diagnostic breakdown of Daily Streak Check-In for a user.
+    """
+    user = database.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
+
+    last_dt_raw = user.get("last_checkin")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    
+    last_dt = None
+    if isinstance(last_dt_raw, str):
+        try:
+            last_dt = datetime.fromisoformat(last_dt_raw)
+        except Exception:
+            last_dt = None
+
+    if last_dt and last_dt.tzinfo is not None:
+        last_dt = last_dt.replace(tzinfo=None)
+
+    status_str = "CLAIMABLE"
+    hours_left = 0
+    next_avail = None
+
+    if last_dt:
+        diff_sec = (now - last_dt).total_seconds()
+        if diff_sec < 86400:
+            status_str = "ALREADY_CLAIMED"
+            hours_left = max(1, int((86400 - diff_sec) // 3600))
+            next_avail = (last_dt + timedelta(seconds=86400)).isoformat()
+
+    return {
+        "user_id": user["user_id"],
+        "credits": user.get("credits", 0),
+        "checkin_streak": user.get("checkin_streak", 0),
+        "last_checkin_at": last_dt.isoformat() if last_dt else None,
+        "status": status_str,
+        "hours_left": hours_left,
+        "next_available_at": next_avail
+    }
+
 if __name__ == "__main__":
+
     import uvicorn
     port = int(os.getenv("PORT", 8080))
     uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)
