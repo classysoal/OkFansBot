@@ -20,10 +20,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import database
-from services.verification import VerificationManager
+from services.verification import VerificationManager, VerificationService
 from services.referrals import ReferralManager
 from services.rewards import RewardManager
 from services.video_catalog import VideoCatalog
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("okfans_api")
