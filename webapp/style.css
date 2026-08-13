@@ -371,11 +371,14 @@ a {
   bottom: 0;
   left: 0;
   right: 0;
-  padding-bottom: var(--safe-area-bottom);
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-subtle);
+  padding-bottom: max(var(--safe-area-bottom), 10px);
+  background: rgba(13, 19, 36, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   z-index: 100;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
 }
 
 .nav-item {
@@ -384,30 +387,41 @@ a {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: var(--space-2) 0;
-  min-height: 56px; /* Touch target >= 44px */
+  padding: 8px 0 4px;
+  min-height: 52px;
   color: var(--text-muted);
   cursor: pointer;
-  transition: color var(--transition-fast);
+  transition: color var(--transition-fast), transform var(--transition-fast);
   border: none;
   background: none;
   font-family: var(--font-family);
   outline: none;
+  user-select: none;
 }
 
 .nav-item.active {
-  color: var(--accent-primary);
+  color: #3b82f6;
 }
 
 .nav-item .nav-icon {
-  font-size: 20px;
-  margin-bottom: 2px;
+  width: 22px;
+  height: 22px;
+  margin-bottom: 3px;
+  stroke: var(--text-muted);
+  transition: stroke var(--transition-fast), transform var(--transition-fast);
+}
+
+.nav-item.active .nav-icon {
+  transform: translateY(-1px);
+  stroke: #3b82f6;
 }
 
 .nav-item .nav-label {
   font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.2px;
 }
+
 
 /* 8. Tab views */
 .tab-view {
