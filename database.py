@@ -329,10 +329,20 @@ def init_db():
             status VARCHAR(50) NOT NULL DEFAULT 'RESERVED',
             requested_count INT NOT NULL DEFAULT 5,
             delivered_count INT NOT NULL DEFAULT 0,
+            idempotency_key VARCHAR(128),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             completed_at TIMESTAMP
         );
         """)
+        try:
+            if is_postgres_conn(conn):
+                cursor.execute("ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);")
+            else:
+                cursor.execute("ALTER TABLE reward_redemptions ADD COLUMN idempotency_key TEXT;")
+        except Exception:
+            pass
+
+
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS reward_redemption_items (
@@ -536,10 +546,16 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'RESERVED',
             requested_count INTEGER NOT NULL DEFAULT 5,
             delivered_count INTEGER NOT NULL DEFAULT 0,
+            idempotency_key TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             completed_at TIMESTAMP
         );
         """)
+        try:
+            cursor.execute("ALTER TABLE reward_redemptions ADD COLUMN idempotency_key TEXT;")
+        except Exception:
+            pass
+
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS reward_redemption_items (
@@ -2170,27 +2186,60 @@ def select_distinct_reward_batch(user_id: int, count: int = 5, max_limit: int = 
 
 def get_active_user_redemption(user_id: int) -> dict:
     """
-    Returns active in-progress redemption for user_id if one exists (created in last 5 minutes).
+    Returns active in-progress redemption for user_id if one exists (updated in last 5 minutes).
+    Automatically expires stale redemptions (>5m without update) as STALE_ABANDONED.
     Enforces ONE active redemption per user invariant.
     """
     conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at
-            FROM reward_redemptions
-            WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING')
-            ORDER BY created_at DESC LIMIT 1
-        """, (user_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        with conn:
+            cursor = conn.cursor()
+            # 1. Clean up stale redemptions older than 5 minutes
+            five_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+            cursor.execute("""
+                UPDATE reward_redemptions
+                SET status = 'STALE_ABANDONED'
+                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING') AND created_at < %s
+            """, (user_id, five_mins_ago))
+            
+            # 2. Check active non-stale redemption
+            cursor.execute("""
+                SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at
+                FROM reward_redemptions
+                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING')
+                ORDER BY created_at DESC LIMIT 1
+            """, (user_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
     except Exception as e:
         logging.error(f"Error checking active redemption for user {user_id}: {e}")
         return None
     finally:
         conn.close()
 
-def create_redemption_reservation(redemption_id: str, user_id: int, batch: list) -> bool:
+def get_redemption_by_idempotency_key(user_id: int, idempotency_key: str) -> dict:
+    """
+    Looks up existing redemption by user_id and idempotency_key to prevent duplicate submissions.
+    """
+    if not idempotency_key:
+        return None
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at, completed_at
+            FROM reward_redemptions
+            WHERE user_id = %s AND idempotency_key = %s
+        """, (user_id, idempotency_key))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        logging.error(f"Error fetching redemption by idempotency key: {e}")
+        return None
+    finally:
+        conn.close()
+
+def create_redemption_reservation(redemption_id: str, user_id: int, batch: list, idempotency_key: str = None) -> bool:
     """
     Creates a reward_redemptions row and associated reward_redemption_items rows atomically.
     """
@@ -2201,9 +2250,9 @@ def create_redemption_reservation(redemption_id: str, user_id: int, batch: list)
             now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             
             cursor.execute("""
-                INSERT INTO reward_redemptions (redemption_id, user_id, status, requested_count, delivered_count, created_at)
-                VALUES (%s, %s, 'RESERVED', %s, 0, %s)
-            """, (redemption_id, user_id, len(batch), now_str))
+                INSERT INTO reward_redemptions (redemption_id, user_id, status, requested_count, delivered_count, created_at, idempotency_key)
+                VALUES (%s, %s, 'RESERVED', %s, 0, %s, %s)
+            """, (redemption_id, user_id, len(batch), now_str, idempotency_key))
             
             for item in batch:
                 cursor.execute("""
@@ -2265,6 +2314,44 @@ def finalize_redemption_status(redemption_id: str, status: str) -> bool:
         return False
     finally:
         conn.close()
+
+def get_corrupted_redemptions_diagnostic(user_id: int = None) -> dict:
+    """
+    Read-only diagnostic audit summarizing past redemptions, ledger debits, delivered items, and partial status.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        query = "SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at, completed_at FROM reward_redemptions"
+        params = []
+        if user_id:
+            query += " WHERE user_id = %s"
+            params.append(user_id)
+        query += " ORDER BY created_at DESC"
+        
+        cursor.execute(query, tuple(params))
+        rows = [dict(r) for r in cursor.fetchall()]
+        
+        total_redemptions = len(rows)
+        completed = [r for r in rows if r['status'] == 'COMPLETED']
+        partial = [r for r in rows if r['status'] == 'PARTIALLY_DELIVERED']
+        failed = [r for r in rows if r['status'] in ('FAILED', 'STALE_ABANDONED')]
+
+        for r in rows:
+            for k in ['created_at', 'completed_at']:
+                if hasattr(r.get(k), 'isoformat'):
+                    r[k] = r[k].isoformat()
+
+        return {
+            "total_redemptions": total_redemptions,
+            "completed_count": len(completed),
+            "partially_delivered_count": len(partial),
+            "failed_count": len(failed),
+            "redemptions_history": rows
+        }
+    finally:
+        conn.close()
+
 
 
 

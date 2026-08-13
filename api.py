@@ -526,7 +526,25 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # 2. VIP Tier and Credit Cost Check
+    # 0. Idempotency Check
+    idempotency_key = request.headers.get("X-Idempotency-Key")
+    if idempotency_key:
+        existing_red = database.get_redemption_by_idempotency_key(user_id, idempotency_key)
+        if existing_red:
+            updated_user = database.get_user(user_id)
+            return {
+                "ok": True,
+                "status": existing_red["status"],
+                "data": {
+                    "redemption_id": existing_red["redemption_id"],
+                    "requested_count": existing_red["requested_count"],
+                    "delivered_count": existing_red["delivered_count"],
+                    "new_credits": updated_user.get("credits", 0) if updated_user else 0,
+                    "message": f"✓ Idempotent response: Redemption {existing_red['redemption_id']} previously processed."
+                },
+                "request_id": req_id
+            }
+
     # 1. Active redemption lock check (enforces 1 active redemption per user)
     active_red = database.get_active_user_redemption(user_id)
     if active_red:
@@ -542,6 +560,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                 "request_id": req_id
             }
         )
+
 
     # 2. Check credit balance
     vip_info = database.get_user_vip_tier_info(user_id)
@@ -992,6 +1011,14 @@ def get_admin_ledger_audit(user_id: int, admin: dict = Depends(get_admin_user)):
     if "error" in audit:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
     return audit
+
+@app.get("/api/admin/corrupted-redemptions-audit")
+def get_admin_corrupted_redemptions_audit(user_id: Optional[int] = None, admin: dict = Depends(get_admin_user)):
+    """
+    Read-only diagnostic audit summarizing past redemptions, ledger debits, delivered items, and partial status.
+    """
+    return database.get_corrupted_redemptions_diagnostic(user_id)
+
 
 
 if __name__ == "__main__":

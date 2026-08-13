@@ -86,6 +86,7 @@ class StagingAcceptanceGateTests(unittest.TestCase):
 
     def test_distinct_batch_selection_and_concurrency_lock(self):
         """Verifies single-query distinct batch selection and active redemption concurrency lock."""
+        import uuid
         test_uid = 6193742824
         user = database.get_user(test_uid)
         if not user:
@@ -98,7 +99,7 @@ class StagingAcceptanceGateTests(unittest.TestCase):
             self.assertEqual(len(v_ids), len(set(v_ids)), f"Duplicate video IDs found in batch: {v_ids}")
         
         # 2. Redemption reservation and active lock test
-        red_id = "test_red_123"
+        red_id = f"test_red_{uuid.uuid4().hex[:8]}"
         ok = database.create_redemption_reservation(red_id, test_uid, batch or [{"video_id": 999, "file_id": "test_f"}])
         self.assertTrue(ok)
         
@@ -111,6 +112,32 @@ class StagingAcceptanceGateTests(unittest.TestCase):
         active_after = database.get_active_user_redemption(test_uid)
         self.assertIsNone(active_after)
 
+    def test_idempotency_and_stale_lock_handling(self):
+        """Verifies idempotency key lookup and stale lock cleanup."""
+        import uuid
+        test_uid = 6193742824
+        user = database.get_user(test_uid)
+        if not user:
+            database.upsert_user_by_telegram_id(test_uid, "tester", "GateTester")
+
+        # 1. Create reservation with idempotency key
+        idem_key = f"idem_{uuid.uuid4().hex[:8]}"
+        red_id = f"test_red_idem_{uuid.uuid4().hex[:8]}"
+        ok = database.create_redemption_reservation(red_id, test_uid, [{"video_id": 101, "file_id": "f101"}], idempotency_key=idem_key)
+        self.assertTrue(ok)
+
+        # 2. Lookup by idempotency key
+        existing = database.get_redemption_by_idempotency_key(test_uid, idem_key)
+        self.assertIsNotNone(existing)
+        self.assertEqual(existing["redemption_id"], red_id)
+
+        # 3. Finalize and check diagnostic audit
+        database.finalize_redemption_status(red_id, "COMPLETED")
+        diag = database.get_corrupted_redemptions_diagnostic(test_uid)
+        self.assertGreater(diag["total_redemptions"], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
+
 
