@@ -579,12 +579,49 @@ a {
 
 /* 15. Utility classes */
 .text-center { text-align: center; }
+.text-left { text-align: left; }
+.mt-1 { margin-top: var(--space-1); }
 .mt-2 { margin-top: var(--space-2); }
+.mt-3 { margin-top: var(--space-3); }
 .mt-4 { margin-top: var(--space-4); }
+.mb-1 { margin-bottom: var(--space-1); }
 .mb-2 { margin-bottom: var(--space-2); }
+.mb-3 { margin-bottom: var(--space-3); }
 .mb-4 { margin-bottom: var(--space-4); }
+.mx-auto { margin-left: auto; margin-right: auto; }
 .d-flex { display: flex; }
+.flex-column { flex-direction: column; }
+.flex-1 { flex: 1; }
 .align-center { align-items: center; }
 .justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.gap-1 { gap: var(--space-1); }
 .gap-2 { gap: var(--space-2); }
 .gap-3 { gap: var(--space-3); }
+.w-100 { width: 100%; box-sizing: border-box; }
+.border-none { border: none; }
+.cursor-pointer { cursor: pointer; }
+.opacity-70 { opacity: 0.7; }
+.text-teal { color: var(--accent-teal); }
+.text-gold { color: var(--accent-gold); }
+.text-muted { color: var(--text-muted); }
+.text-secondary { color: var(--text-secondary); }
+.text-primary { color: var(--text-primary); }
+.font-size-xs { font-size: var(--font-size-xs); }
+.font-size-sm { font-size: var(--font-size-sm); }
+.font-size-md { font-size: var(--font-size-md); }
+.font-size-lg { font-size: var(--font-size-lg); }
+.font-size-2xl { font-size: var(--font-size-2xl); }
+.font-weight-medium { font-weight: var(--font-weight-medium); }
+.font-weight-semibold { font-weight: var(--font-weight-semibold); }
+.font-weight-bold { font-weight: var(--font-weight-bold); }
+.border-radius-sm { border-radius: var(--radius-sm); }
+.border-radius-md { border-radius: var(--radius-md); }
+.border-radius-lg { border-radius: var(--radius-lg); }
+.p-2 { padding: var(--space-2); }
+.p-3 { padding: var(--space-3); }
+.p-4 { padding: var(--space-4); }
+.bg-elevated { background: var(--bg-elevated); }
+.bg-input { background: var(--bg-input); }
+.border-card { border: 1px solid var(--border-card); }
+

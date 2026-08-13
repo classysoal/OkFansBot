@@ -466,6 +466,12 @@ def init_db():
     conn.commit()
     conn.close()
     logging.info("Database initialized successfully.")
+    
+    try:
+        sync_channels_from_config()
+    except Exception as e:
+        logging.error(f"Error syncing channels on init: {e}")
+
 
 # --- USER MANAGEMENT ---
 
@@ -897,6 +903,30 @@ def save_required_channel(channel_id: int, label: str, title: str, invite_link: 
         return False
     finally:
         conn.close()
+
+def sync_channels_from_config():
+    import json
+    config_path = "config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            required_list = cfg.get("required_channels", [])
+            for ch in required_list:
+                save_required_channel(
+                    channel_id=ch.get("channel_id"),
+                    label=ch.get("label", "Channel"),
+                    title=ch.get("title", "Required Channel"),
+                    invite_link=ch.get("invite_link"),
+                    channel_type=ch.get("channel_type", "starter"),
+                    verification_method=ch.get("verification_method", "direct_join"),
+                    is_active=ch.get("is_active", 1),
+                    priority=ch.get("priority", 0)
+                )
+            logging.info(f"Synced {len(required_list)} channels to database.")
+        except Exception as e:
+            logging.error(f"Error in sync_channels_from_config: {e}")
+
 
 def resolve_channel_id_by_invite(invite_link: str, channel_id: int) -> int:
     """
