@@ -39,34 +39,37 @@ async function fetchPage() {
     return;
   }
   
-  const newItems = res.data.items || [];
+  const newItems = res.data.history || res.data.items || [];
   _items = _items.concat(newItems);
-  _hasMore = res.data.has_more;
+  _hasMore = res.data.has_more || false;
   
   render();
 }
 
 function render() {
   if (_items.length === 0) {
-    renderEmpty(_container, 'No verification history found.');
+    renderEmpty(_container, 'No verification log found.');
     return;
   }
   
   const html = `
-    <div class="history-list">
-      ${_items.map(item => `
-        <div class="history-item">
-          <div class="history-info">
-            <div class="history-reason">${item.channel_name}</div>
-            <div class="history-time">${new Date(item.timestamp).toLocaleString()}</div>
+    <div class="card">
+      <h2 class="section-title mb-3">Verification Log</h2>
+      <div class="history-list d-flex flex-column gap-2">
+        ${_items.map(item => `
+          <div class="list-item bg-elevated border-radius-sm p-3 d-flex justify-between align-center">
+            <div>
+              <div class="font-weight-medium font-size-sm">${item.channel_name || item.title || 'Channel Verification'}</div>
+              <div class="font-size-xs text-secondary">${item.checked_at || item.timestamp ? new Date(item.checked_at || item.timestamp).toLocaleString() : ''}</div>
+            </div>
+            <span class="badge ${item.result === 'PASS' || item.result === 'COMPLETED' ? 'badge-success' : 'badge-warning'}">
+              ${item.result || 'CHECKED'}
+            </span>
           </div>
-          <div class="history-status status-${item.result.toLowerCase()}">
-            ${item.result}
-          </div>
-        </div>
-      `).join('')}
+        `).join('')}
+      </div>
+      ${_hasMore ? `<button id="btn-load-more" class="btn btn-secondary w-100 mt-3">Load More</button>` : ''}
     </div>
-    ${_hasMore ? `<button id="btn-load-more" class="btn btn-secondary w-full mt-4">Load More</button>` : ''}
   `;
   
   renderSuccess(_container, html);

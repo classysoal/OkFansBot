@@ -35,13 +35,13 @@ async function fetchPage() {
   
   if (!res.ok) {
     if (_page === 1) renderError(_container, res.message, () => load());
-    else alert(res.message); // simple fallback for pagination error
+    else alert(res.message);
     return;
   }
   
-  const newItems = res.data.items || [];
+  const newItems = res.data.history || res.data.items || [];
   _items = _items.concat(newItems);
-  _hasMore = res.data.has_more;
+  _hasMore = res.data.has_more || false;
   
   render();
 }
@@ -53,20 +53,23 @@ function render() {
   }
   
   const html = `
-    <div class="history-list">
-      ${_items.map(item => `
-        <div class="history-item">
-          <div class="history-info">
-            <div class="history-reason">${item.reason}</div>
-            <div class="history-time">${new Date(item.timestamp).toLocaleString()}</div>
+    <div class="card">
+      <h2 class="section-title mb-3">Rewards History</h2>
+      <div class="history-list d-flex flex-column gap-2">
+        ${_items.map(item => `
+          <div class="list-item bg-elevated border-radius-sm p-3 d-flex justify-between align-center">
+            <div>
+              <div class="font-weight-medium font-size-sm">${item.reason || 'Reward'}</div>
+              <div class="font-size-xs text-secondary">${item.created_at || item.timestamp ? new Date(item.created_at || item.timestamp).toLocaleString() : ''}</div>
+            </div>
+            <div class="font-weight-bold ${item.amount > 0 ? 'text-teal' : 'text-primary'}">
+              ${item.amount > 0 ? '+' : ''}${item.amount} 🪙
+            </div>
           </div>
-          <div class="history-amount ${item.amount > 0 ? 'positive' : 'negative'}">
-            ${item.amount > 0 ? '+' : ''}${item.amount}
-          </div>
-        </div>
-      `).join('')}
+        `).join('')}
+      </div>
+      ${_hasMore ? `<button id="btn-load-more" class="btn btn-secondary w-100 mt-3">Load More</button>` : ''}
     </div>
-    ${_hasMore ? `<button id="btn-load-more" class="btn btn-secondary w-full mt-4">Load More</button>` : ''}
   `;
   
   renderSuccess(_container, html);
