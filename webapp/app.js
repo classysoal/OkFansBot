@@ -70,11 +70,13 @@ async function bootstrap() {
   }
   if (overlay) overlay.style.display = 'none';
 
-  // 5. Init all screen modules
+  // 5. Init all screen modules & register with Router
+  Router.registerScreens(SCREENS);
   for (const [id, screen] of Object.entries(SCREENS)) {
     const container = document.getElementById(`view-${id}`);
     if (container && screen.init) screen.init(container);
   }
+
 
   // 6. Wire bottom nav clicks
   document.querySelectorAll('.nav-item').forEach(btn => {

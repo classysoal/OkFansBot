@@ -64,6 +64,10 @@ const Router = {
     // Unknown params fall back to 'home' — already default
   },
 
+  registerScreens(screens) {
+    this.screens = screens;
+  },
+
   _renderActiveScreen(screenId) {
     // Hide all tab views
     document.querySelectorAll('.tab-view').forEach(el => el.classList.remove('active'));
@@ -75,7 +79,13 @@ const Router = {
       btn.classList.toggle('active', btn.dataset.tab === screenId);
     });
     AppState.ui.currentTab = screenId;
+
+    // Trigger screen load if registered
+    if (this.screens && this.screens[screenId]?.load) {
+      this.screens[screenId].load();
+    }
   },
+
 
   _updateBackButton() {
     const stack = AppState.ui.screenStack;
