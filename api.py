@@ -526,7 +526,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # 0. Idempotency Check
+    # 0. Strict Business Idempotency Check (X-Idempotency-Key)
     idempotency_key = request.headers.get("X-Idempotency-Key")
     if idempotency_key:
         existing_red = database.get_redemption_by_idempotency_key(user_id, idempotency_key)
@@ -545,7 +545,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                 "request_id": req_id
             }
 
-    # 1. Active redemption lock check (enforces 1 active redemption per user)
+    # 1. Active redemption lock & lease check (enforces 1 active lease per user)
     active_red = database.get_active_user_redemption(user_id)
     if active_red:
         return JSONResponse(
@@ -560,7 +560,6 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                 "request_id": req_id
             }
         )
-
 
     # 2. Check credit balance
     vip_info = database.get_user_vip_tier_info(user_id)
@@ -600,10 +599,30 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # 4. Create reservation & deduct credit atomically
+    # 4. Create fenced reservation & deduct credit atomically
     redemption_id = f"red_{uuid.uuid4().hex[:12]}"
-    reserved = database.create_redemption_reservation(redemption_id, user_id, distinct_batch)
+    lease_token = f"lease_{uuid.uuid4().hex[:12]}"
+    reserved = database.create_redemption_reservation(
+        redemption_id, user_id, distinct_batch, idempotency_key=idempotency_key, lease_token=lease_token
+    )
     if not reserved:
+        # Check if failed due to DB-level idempotency constraint race
+        if idempotency_key:
+            existing_red = database.get_redemption_by_idempotency_key(user_id, idempotency_key)
+            if existing_red:
+                updated_user = database.get_user(user_id)
+                return {
+                    "ok": True,
+                    "status": existing_red["status"],
+                    "data": {
+                        "redemption_id": existing_red["redemption_id"],
+                        "requested_count": existing_red["requested_count"],
+                        "delivered_count": existing_red["delivered_count"],
+                        "new_credits": updated_user.get("credits", 0) if updated_user else 0,
+                        "message": f"✓ Idempotent response: Redemption {existing_red['redemption_id']} previously processed."
+                    },
+                    "request_id": req_id
+                }
         return JSONResponse(
             status_code=500,
             headers={"X-Request-ID": req_id},
@@ -619,7 +638,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
 
     deducted = database.deduct_credits(user_id, required_cost, f"redeem_{redemption_id}")
     if not deducted:
-        database.finalize_redemption_status(redemption_id, "FAILED")
+        database.finalize_redemption_status_fenced(redemption_id, "FAILED", lease_token)
         return JSONResponse(
             status_code=400,
             headers={"X-Request-ID": req_id},
@@ -633,7 +652,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # 5. Deliver distinct videos via Telegram Bot API
+    # 5. Deliver distinct videos via Telegram Bot API with Lease Fencing
     import httpx
     expiry_delay = int(config.get("video_deletion_delay_seconds", 1800))
     del_minutes = max(1, expiry_delay // 60)
@@ -642,6 +661,12 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
     delivered_vids = []
     async with httpx.AsyncClient() as client:
         for idx, video in enumerate(distinct_batch):
+            # Fencing Lease Renewal Check before each item delivery
+            lease_valid = database.renew_redemption_lease(redemption_id, lease_token)
+            if not lease_valid:
+                logger.error(f"[{req_id}] Fenced lease ownership lost for redemption {redemption_id}. Aborting delivery loop!")
+                break
+
             vid_id = video["video_id"]
             caption_text = (
                 f"🎁 <b>{vip_info['badge']} VIP Reward Item ({idx + 1}/{len(distinct_batch)})</b>\n\n"
@@ -665,7 +690,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                     delivered_count += 1
                     delivered_vids.append(vid_id)
                     msg_id = res.json().get("result", {}).get("message_id", 0)
-                    database.update_redemption_item_delivered(redemption_id, vid_id, msg_id)
+                    database.update_redemption_item_delivered_fenced(redemption_id, vid_id, msg_id, lease_token)
                     database.record_video_delivery(user_id, vid_id, user_id, msg_id, expiry_delay)
                 else:
                     logger.warning(f"[{req_id}] Telegram sendVideo returned HTTP {res.status_code}")
@@ -680,7 +705,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
     else:
         final_status = "FAILED"
 
-    database.finalize_redemption_status(redemption_id, final_status)
+    database.finalize_redemption_status_fenced(redemption_id, final_status, lease_token)
 
     if delivered_count == 0:
         database.add_credits(user_id, required_cost, f"refund_{redemption_id}")
@@ -696,6 +721,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                 "request_id": req_id
             }
         )
+
 
     database.save_user_last_bundle(user_id, delivered_vids)
     database.increment_claimed_count(user_id)

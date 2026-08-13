@@ -11,6 +11,17 @@ class StagingAcceptanceGateTests(unittest.TestCase):
 
     def setUp(self):
         database.init_db()
+        conn = database.get_db_connection()
+        try:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM reward_redemption_items WHERE redemption_id IN (SELECT redemption_id FROM reward_redemptions WHERE user_id = 6193742824);")
+                cursor.execute("DELETE FROM reward_redemptions WHERE user_id = 6193742824;")
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
 
     def test_phase_1_database_production_no_sqlite_fallback(self):
         """Phase 1: Validates that PostgreSQL failure in production raises RuntimeError and NEVER falls back to SQLite."""
@@ -145,5 +156,52 @@ class StagingAcceptanceGateTests(unittest.TestCase):
         self.assertIn("database_mode", diag)
         self.assertNotIn("password", str(diag).lower())
 
+    def test_fenced_lease_ownership_loss_aborts_delivery(self):
+        """Verifies that if Worker A loses its fencing lease, fenced operations return False, preventing split-brain delivery."""
+        import uuid
+        test_uid = 6193742824
+        user = database.get_user(test_uid)
+        if not user:
+            database.upsert_user_by_telegram_id(test_uid, "tester", "GateTester")
+
+        red_id = f"test_fence_{uuid.uuid4().hex[:8]}"
+        lease_a = "token_worker_A"
+        
+        ok = database.create_redemption_reservation(red_id, test_uid, [{"video_id": 201, "file_id": "f201"}], lease_token=lease_a)
+        self.assertTrue(ok)
+
+        # Worker A updates item 1 with correct lease -> SUCCEEDS
+        ok_a = database.update_redemption_item_delivered_fenced(red_id, 201, 888, lease_token=lease_a)
+        self.assertTrue(ok_a)
+
+        # Worker A attempts update with invalid/expired lease token -> FAILS (0 rows affected)
+        ok_invalid = database.update_redemption_item_delivered_fenced(red_id, 201, 889, lease_token="token_worker_INVALID")
+        self.assertFalse(ok_invalid, "Fenced update MUST fail when lease token does not match active worker token")
+        database.finalize_redemption_status_fenced(red_id, "COMPLETED", lease_a)
+
+
+    def test_database_level_idempotency_unique_constraint(self):
+        """Verifies database-level UNIQUE(user_id, idempotency_key) prevents duplicate reservation insertion."""
+        import uuid
+        test_uid = 6193742824
+        user = database.get_user(test_uid)
+        if not user:
+            database.upsert_user_by_telegram_id(test_uid, "tester", "GateTester")
+
+        idem_key = f"unique_idem_{uuid.uuid4().hex[:8]}"
+        red_1 = f"red_unique_1_{uuid.uuid4().hex[:6]}"
+        red_2 = f"red_unique_2_{uuid.uuid4().hex[:6]}"
+
+        ok1 = database.create_redemption_reservation(red_1, test_uid, [{"video_id": 301, "file_id": "f301"}], idempotency_key=idem_key)
+        self.assertTrue(ok1)
+
+        # Attempting second insert with SAME user_id and idempotency_key MUST fail at DB level
+        ok2 = database.create_redemption_reservation(red_2, test_uid, [{"video_id": 302, "file_id": "f302"}], idempotency_key=idem_key)
+        self.assertFalse(ok2, "DB UNIQUE constraint MUST prevent duplicate reservation with same idempotency_key")
+
+        database.finalize_redemption_status(red_1, "COMPLETED")
+
 if __name__ == '__main__':
     unittest.main()
+
+

@@ -56,7 +56,7 @@ function handleCacheInvalidation(response) {
   invalidate.split(',').map(s => s.trim()).forEach(key => Cache.evict(key));
 }
 
-async function _request(method, path, body = null) {
+async function _request(method, path, body = null, extraHeaders = {}) {
   const url = `${API_BASE}${path}`;
   const isGet = method === 'GET';
 
@@ -70,10 +70,11 @@ async function _request(method, path, body = null) {
 
   const fetchOptions = {
     method,
-    headers: getHeaders(),
+    headers: { ...getHeaders(), ...extraHeaders },
     signal: controller.signal,
   };
   if (body) fetchOptions.body = JSON.stringify(body);
+
 
   const promise = (async () => {
     try {
@@ -178,9 +179,11 @@ const ApiClient = {
   async claimDaily() {
     return _request('POST', '/api/rewards/claim-daily');
   },
-  async redeemBundle() {
-    return _request('POST', '/api/rewards/redeem');
+  async redeemBundle(idempotencyKey = null) {
+    const key = idempotencyKey || `idem_red_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    return _request('POST', '/api/rewards/redeem', null, { 'X-Idempotency-Key': key });
   },
+
 
   // Referrals
   async getReferrals() {

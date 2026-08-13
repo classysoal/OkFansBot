@@ -330,17 +330,36 @@ def init_db():
             requested_count INT NOT NULL DEFAULT 5,
             delivered_count INT NOT NULL DEFAULT 0,
             idempotency_key VARCHAR(128),
+            lease_token VARCHAR(64),
+            lease_expires_at TIMESTAMP,
+            worker_id VARCHAR(64),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             completed_at TIMESTAMP
         );
         """)
+        for col_sql in [
+            "ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);",
+            "ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS lease_token VARCHAR(64);",
+            "ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP;",
+            "ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS worker_id VARCHAR(64);",
+            "ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
+        ]:
+            try:
+                if is_postgres_conn(conn):
+                    cursor.execute(col_sql)
+                else:
+                    col_name = col_sql.split("ADD COLUMN IF NOT EXISTS ")[1].split(" ")[0]
+                    col_type = "TEXT"
+                    cursor.execute(f"ALTER TABLE reward_redemptions ADD COLUMN {col_name} {col_type};")
+            except Exception:
+                pass
+
         try:
-            if is_postgres_conn(conn):
-                cursor.execute("ALTER TABLE reward_redemptions ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);")
-            else:
-                cursor.execute("ALTER TABLE reward_redemptions ADD COLUMN idempotency_key TEXT;")
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_redemptions_user_idem ON reward_redemptions(user_id, idempotency_key);")
         except Exception:
             pass
+
 
 
 
@@ -2186,29 +2205,36 @@ def select_distinct_reward_batch(user_id: int, count: int = 5, max_limit: int = 
 
 def get_active_user_redemption(user_id: int) -> dict:
     """
-    Returns active in-progress redemption for user_id if one exists (updated in last 5 minutes).
-    Automatically expires stale redemptions (>5m without update) as STALE_ABANDONED.
-    Enforces ONE active redemption per user invariant.
+    Returns active in-progress redemption for user_id if lease is active (lease_expires_at > NOW()).
+    Stale redemptions with expired lease and partial deliveries move to RECONCILIATION_REQUIRED.
+    Stale redemptions with 0 deliveries move to STALE_ABANDONED.
     """
     conn = get_db_connection()
     try:
         with conn:
             cursor = conn.cursor()
-            # 1. Clean up stale redemptions older than 5 minutes
-            five_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+            now_iso = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            
+            # 1. Clean up expired leases
             cursor.execute("""
                 UPDATE reward_redemptions
-                SET status = 'STALE_ABANDONED'
-                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING') AND created_at < %s
-            """, (user_id, five_mins_ago))
+                SET status = 'RECONCILIATION_REQUIRED', updated_at = %s
+                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING') AND lease_expires_at < %s AND delivered_count > 0
+            """, (now_iso, user_id, now_iso))
             
-            # 2. Check active non-stale redemption
             cursor.execute("""
-                SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at
+                UPDATE reward_redemptions
+                SET status = 'STALE_ABANDONED', updated_at = %s
+                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING') AND lease_expires_at < %s AND delivered_count = 0
+            """, (now_iso, user_id, now_iso))
+            
+            # 2. Check active non-expired redemption
+            cursor.execute("""
+                SELECT redemption_id, user_id, status, requested_count, delivered_count, lease_token, lease_expires_at, created_at
                 FROM reward_redemptions
-                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING')
+                WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING') AND lease_expires_at >= %s
                 ORDER BY created_at DESC LIMIT 1
-            """, (user_id,))
+            """, (user_id, now_iso))
             row = cursor.fetchone()
             return dict(row) if row else None
     except Exception as e:
@@ -2219,7 +2245,7 @@ def get_active_user_redemption(user_id: int) -> dict:
 
 def get_redemption_by_idempotency_key(user_id: int, idempotency_key: str) -> dict:
     """
-    Looks up existing redemption by user_id and idempotency_key to prevent duplicate submissions.
+    Looks up existing redemption by user_id and idempotency_key.
     """
     if not idempotency_key:
         return None
@@ -2227,7 +2253,7 @@ def get_redemption_by_idempotency_key(user_id: int, idempotency_key: str) -> dic
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at, completed_at
+            SELECT redemption_id, user_id, status, requested_count, delivered_count, lease_token, created_at, completed_at
             FROM reward_redemptions
             WHERE user_id = %s AND idempotency_key = %s
         """, (user_id, idempotency_key))
@@ -2239,20 +2265,35 @@ def get_redemption_by_idempotency_key(user_id: int, idempotency_key: str) -> dic
     finally:
         conn.close()
 
-def create_redemption_reservation(redemption_id: str, user_id: int, batch: list, idempotency_key: str = None) -> bool:
+def create_redemption_reservation(
+    redemption_id: str,
+    user_id: int,
+    batch: list,
+    idempotency_key: str = None,
+    lease_token: str = None,
+    lease_duration_seconds: int = 120,
+    worker_id: str = "api_worker"
+) -> bool:
     """
-    Creates a reward_redemptions row and associated reward_redemption_items rows atomically.
+    Creates a reward_redemptions row with lease token and expires_at timestamp.
+    Enforces UNIQUE(user_id, idempotency_key) constraint at DB level.
     """
     conn = get_db_connection()
     try:
         with conn:
             cursor = conn.cursor()
-            now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+            now_str = now_dt.isoformat()
+            lease_exp_str = (now_dt + timedelta(seconds=lease_duration_seconds)).isoformat()
+            token = lease_token or f"lease_{uuid.uuid4().hex[:12]}"
             
             cursor.execute("""
-                INSERT INTO reward_redemptions (redemption_id, user_id, status, requested_count, delivered_count, created_at, idempotency_key)
-                VALUES (%s, %s, 'RESERVED', %s, 0, %s, %s)
-            """, (redemption_id, user_id, len(batch), now_str, idempotency_key))
+                INSERT INTO reward_redemptions (
+                    redemption_id, user_id, status, requested_count, delivered_count,
+                    created_at, updated_at, idempotency_key, lease_token, lease_expires_at, worker_id
+                )
+                VALUES (%s, %s, 'RESERVED', %s, 0, %s, %s, %s, %s, %s, %s)
+            """, (redemption_id, user_id, len(batch), now_str, now_str, idempotency_key, token, lease_exp_str, worker_id))
             
             for item in batch:
                 cursor.execute("""
@@ -2266,9 +2307,34 @@ def create_redemption_reservation(redemption_id: str, user_id: int, batch: list,
     finally:
         conn.close()
 
-def update_redemption_item_delivered(redemption_id: str, video_id: int, message_id: int) -> bool:
+def renew_redemption_lease(redemption_id: str, lease_token: str, extension_seconds: int = 120) -> bool:
     """
-    Marks a single item as DELIVERED in reward_redemption_items and increments delivered_count in reward_redemptions.
+    Renews active lease if worker still holds lease_token and status is in progress.
+    If row count is 0, lease was taken over or lost -> Worker MUST STOP processing.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+            now_str = now_dt.isoformat()
+            new_exp_str = (now_dt + timedelta(seconds=extension_seconds)).isoformat()
+            
+            cursor.execute("""
+                UPDATE reward_redemptions
+                SET lease_expires_at = %s, updated_at = %s
+                WHERE redemption_id = %s AND lease_token = %s AND status IN ('RESERVED', 'DELIVERING')
+            """, (new_exp_str, now_str, redemption_id, lease_token))
+            return (cursor.rowcount > 0)
+    except Exception as e:
+        logging.error(f"Error renewing lease for redemption {redemption_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_redemption_item_delivered_fenced(redemption_id: str, video_id: int, message_id: int, lease_token: str) -> bool:
+    """
+    Updates item state and redemption status IF lease_token is valid. Fails if fencing token check fails.
     """
     conn = get_db_connection()
     try:
@@ -2284,19 +2350,19 @@ def update_redemption_item_delivered(redemption_id: str, video_id: int, message_
             
             cursor.execute("""
                 UPDATE reward_redemptions
-                SET delivered_count = delivered_count + 1, status = 'DELIVERING'
-                WHERE redemption_id = %s
-            """, (redemption_id,))
-            return True
+                SET delivered_count = delivered_count + 1, status = 'DELIVERING', updated_at = %s
+                WHERE redemption_id = %s AND lease_token = %s AND status IN ('RESERVED', 'DELIVERING')
+            """, (now_str, redemption_id, lease_token))
+            return (cursor.rowcount > 0)
     except Exception as e:
-        logging.error(f"Error updating redemption item delivered: {e}")
+        logging.error(f"Error in update_redemption_item_delivered_fenced: {e}")
         return False
     finally:
         conn.close()
 
-def finalize_redemption_status(redemption_id: str, status: str) -> bool:
+def finalize_redemption_status_fenced(redemption_id: str, status: str, lease_token: str) -> bool:
     """
-    Finalizes reward_redemptions status ('COMPLETED', 'PARTIALLY_DELIVERED', or 'FAILED') with completed_at timestamp.
+    Finalizes reward_redemptions status IF lease_token is valid.
     """
     conn = get_db_connection()
     try:
@@ -2305,15 +2371,38 @@ def finalize_redemption_status(redemption_id: str, status: str) -> bool:
             now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             cursor.execute("""
                 UPDATE reward_redemptions
-                SET status = %s, completed_at = %s
+                SET status = %s, completed_at = %s, updated_at = %s
+                WHERE redemption_id = %s AND lease_token = %s
+            """, (status, now_str, now_str, redemption_id, lease_token))
+            return (cursor.rowcount > 0)
+    except Exception as e:
+        logging.error(f"Error finalizing fenced redemption status {redemption_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def finalize_redemption_status(redemption_id: str, status: str) -> bool:
+    """
+    Backward-compatible non-fenced redemption status finalization.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            cursor.execute("""
+                UPDATE reward_redemptions
+                SET status = %s, completed_at = %s, updated_at = %s
                 WHERE redemption_id = %s
-            """, (status, now_str, redemption_id))
+            """, (status, now_str, now_str, redemption_id))
             return True
     except Exception as e:
         logging.error(f"Error finalizing redemption status {redemption_id}: {e}")
         return False
     finally:
         conn.close()
+
+
 
 def get_corrupted_redemptions_diagnostic(user_id: int = None) -> dict:
     """
