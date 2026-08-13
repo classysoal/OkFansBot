@@ -136,8 +136,14 @@ class StagingAcceptanceGateTests(unittest.TestCase):
         diag = database.get_corrupted_redemptions_diagnostic(test_uid)
         self.assertGreater(diag["total_redemptions"], 0)
 
+    def test_phase_14_db_health_diagnostic(self):
+        """Phase 14: Verifies get_db_diagnostic_info distinguishes engine, mode, and schema status without exposing credentials."""
+        diag = database.get_db_diagnostic_info()
+        self.assertEqual(diag.get("app_status"), "OK")
+        self.assertEqual(diag.get("database_status"), "OK")
+        self.assertIn("database_engine", diag)
+        self.assertIn("database_mode", diag)
+        self.assertNotIn("password", str(diag).lower())
 
 if __name__ == '__main__':
     unittest.main()
-
-

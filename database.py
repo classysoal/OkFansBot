@@ -2352,6 +2352,73 @@ def get_corrupted_redemptions_diagnostic(user_id: int = None) -> dict:
     finally:
         conn.close()
 
+def get_db_diagnostic_info() -> dict:
+    """
+    Diagnostic health report distinguishing APP, DATABASE, ENGINE, CONNECTION MODE, and SCHEMA.
+    Never exposes passwords or sensitive credentials.
+    """
+    from urllib.parse import urlparse
+    
+    info = {
+        "app_status": "OK",
+        "database_status": "UNKNOWN",
+        "database_engine": "sqlite",
+        "database_mode": "LOCAL_DEV",
+        "database_host_redacted": "local",
+        "database_port": None,
+        "schema_status": "UNKNOWN",
+        "tables_count": 0
+    }
+    
+    if DATABASE_URL:
+        try:
+            parsed = urlparse(DATABASE_URL)
+            hostname = parsed.hostname or ""
+            info["database_port"] = parsed.port or 5432
+            info["database_engine"] = "postgresql"
+            
+            # Host sanitization
+            if "pooler.supabase.com" in hostname:
+                info["database_mode"] = "SUPABASE_POOLER_SESSION"
+                info["database_host_redacted"] = f"{hostname[:5]}***.pooler.supabase.com"
+            elif "supabase.co" in hostname:
+                info["database_mode"] = "DIRECT_SUPABASE"
+                info["database_host_redacted"] = f"{hostname[:4]}***.supabase.co"
+            else:
+                info["database_mode"] = "CUSTOM_POSTGRES"
+                info["database_host_redacted"] = f"{hostname[:3]}***" if hostname else "unknown"
+        except Exception:
+            pass
+
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1;")
+            info["database_status"] = "OK"
+            
+            if is_postgres_conn(conn):
+                cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public';")
+                tables = [r["table_name"] if isinstance(r, dict) else r[0] for r in cursor.fetchall()]
+            else:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = [r["name"] if isinstance(r, dict) else r[0] for r in cursor.fetchall()]
+                
+            info["tables_count"] = len(tables)
+            required_tables = {"users", "videos", "reward_redemptions", "credit_ledger"}
+            if required_tables.issubset(set(tables)):
+                info["schema_status"] = "OK"
+            else:
+                info["schema_status"] = "PARTIAL_SCHEMA"
+        finally:
+            conn.close()
+    except Exception as e:
+        info["database_status"] = "DEGRADED"
+        info["error"] = str(e)
+
+    return info
+
+
 
 
 

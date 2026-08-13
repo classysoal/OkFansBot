@@ -1012,12 +1012,32 @@ def get_admin_ledger_audit(user_id: int, admin: dict = Depends(get_admin_user)):
         raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
     return audit
 
+@app.get("/api/health")
+@app.get("/health")
+def get_health():
+    """
+    Health check distinguishing APP, DB, and SCHEMA status.
+    Returns HTTP 200 when DB is OK, HTTP 503 when DB is degraded.
+    """
+    diag = database.get_db_diagnostic_info()
+    if diag.get("database_status") != "OK":
+        return JSONResponse(status_code=503, content=diag)
+    return diag
+
+@app.get("/api/admin/db-diagnostic")
+def get_admin_db_diagnostic(admin: dict = Depends(get_admin_user)):
+    """
+    Detailed database connection and schema diagnostic.
+    """
+    return database.get_db_diagnostic_info()
+
 @app.get("/api/admin/corrupted-redemptions-audit")
 def get_admin_corrupted_redemptions_audit(user_id: Optional[int] = None, admin: dict = Depends(get_admin_user)):
     """
     Read-only diagnostic audit summarizing past redemptions, ledger debits, delivered items, and partial status.
     """
     return database.get_corrupted_redemptions_diagnostic(user_id)
+
 
 
 
