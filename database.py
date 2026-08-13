@@ -131,7 +131,6 @@ def init_db():
             pass
 
         cursor.execute("""
-
         CREATE TABLE IF NOT EXISTS required_channels (
             id SERIAL PRIMARY KEY,
             channel_id BIGINT UNIQUE,
@@ -146,6 +145,18 @@ def init_db():
         """)
 
         cursor.execute("""
+        CREATE TABLE IF NOT EXISTS videos (
+            video_id SERIAL PRIMARY KEY,
+            file_id VARCHAR(255) UNIQUE NOT NULL,
+            caption TEXT,
+            vault VARCHAR(50) DEFAULT 'B',
+            idx INT NOT NULL,
+            is_active INT DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_video_history (
             id SERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL REFERENCES users(user_id),
@@ -154,6 +165,7 @@ def init_db():
             UNIQUE(user_id, video_id)
         );
         """)
+
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS join_events (
@@ -188,17 +200,6 @@ def init_db():
         );
         """)
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS videos (
-            video_id SERIAL PRIMARY KEY,
-            file_id VARCHAR(255) UNIQUE NOT NULL,
-            caption TEXT,
-            vault VARCHAR(50) DEFAULT 'B',
-            idx INT NOT NULL,
-            is_active INT DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS video_deliveries (
@@ -425,6 +426,18 @@ def init_db():
                 pass
 
         cursor.execute("""
+        CREATE TABLE IF NOT EXISTS videos (
+            video_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT UNIQUE NOT NULL,
+            caption TEXT,
+            vault TEXT CHECK(vault IN ('A', 'B', 'C', 'D', 'E')) DEFAULT 'B',
+            idx INTEGER NOT NULL,
+            is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_video_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(user_id),
@@ -433,6 +446,7 @@ def init_db():
             UNIQUE(user_id, video_id)
         );
         """)
+
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS verification_logs (
@@ -481,17 +495,6 @@ def init_db():
         );
         """)
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS videos (
-            video_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_id TEXT UNIQUE NOT NULL,
-            caption TEXT,
-            vault TEXT CHECK(vault IN ('A', 'B', 'C', 'D', 'E')) DEFAULT 'B',
-            idx INTEGER NOT NULL,
-            is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS video_deliveries (
