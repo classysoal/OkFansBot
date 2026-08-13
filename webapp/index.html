@@ -211,22 +211,74 @@
         <div class="section-card" style="margin-top: 14px;">
           <h4>Account Details & Settings</h4>
           <div class="menu-list">
-            <div class="menu-item" onclick="switchTab('view-verification')">
+            <div class="menu-item" onclick="openSubScreen('view-history-verif')">
               <span>🔒 Verification History</span>
               <span class="menu-arrow">›</span>
             </div>
-            <div class="menu-item" onclick="switchTab('view-referrals')">
+            <div class="menu-item" onclick="openSubScreen('view-history-rewards')">
+              <span>🎁 Reward Ledger History</span>
+              <span class="menu-arrow">›</span>
+            </div>
+            <div class="menu-item" onclick="openSubScreen('view-history-referrals')">
               <span>🤝 Referral Breakdown</span>
               <span class="menu-arrow">›</span>
             </div>
-            <div class="menu-item" onclick="switchTab('view-tiers')">
-              <span>🏆 VIP Tier Progress</span>
+            <div class="menu-item" onclick="openSubScreen('view-rules')">
+              <span>📜 Rules & Terms</span>
               <span class="menu-arrow">›</span>
             </div>
-            <div class="menu-item">
-              <span>📜 Rules & Privacy Policy</span>
-              <span class="menu-arrow">›</span>
-            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Secondary Screen: Verification History -->
+      <section id="view-history-verif" class="tab-view">
+        <div class="section-card">
+          <div class="section-header">
+            <h3>🔒 Verification History</h3>
+          </div>
+          <p class="section-desc">Audit log of your historical community verification checks.</p>
+          <div id="verifHistoryList" class="activity-list" style="margin-top: 10px;">
+            <div class="skeleton-card"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Secondary Screen: Reward & Credit History -->
+      <section id="view-history-rewards" class="tab-view">
+        <div class="section-card">
+          <div class="section-header">
+            <h3>🎁 Reward & Credit Ledger</h3>
+          </div>
+          <p class="section-desc">Complete record of credits earned, daily bonuses, and bundle redemptions.</p>
+          <div id="rewardHistoryList" class="activity-list" style="margin-top: 10px;">
+            <div class="skeleton-card"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Secondary Screen: Referral Breakdown -->
+      <section id="view-history-referrals" class="tab-view">
+        <div class="section-card">
+          <div class="section-header">
+            <h3>🤝 Referral Breakdown</h3>
+          </div>
+          <p class="section-desc">Detailed list of invited users and verification statuses.</p>
+          <div id="referralHistoryList" class="activity-list" style="margin-top: 10px;">
+            <div class="skeleton-card"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Secondary Screen: Rules & Terms -->
+      <section id="view-rules" class="tab-view">
+        <div class="section-card">
+          <h3>📜 Rules & Program Terms</h3>
+          <div style="font-size: 13px; color: var(--text-sub); line-height: 1.6; margin-top: 10px;">
+            <p>• <b>1 Credit = 1 Bundle Redemption:</b> Every credit allows you to unlock unseen exclusive video bundles tailored to your VIP tier level.</p>
+            <p style="margin-top: 8px;">• <b>Verification Integrity:</b> You must remain a member or maintain an active join request for required channels. Leaving channels revokes verified status.</p>
+            <p style="margin-top: 8px;">• <b>Flash Referral Bonus:</b> Earn 5 bonus credits for every referred friend who joins & verifies within 24 hours.</p>
+            <p style="margin-top: 8px;">• <b>Daily VIP Check-in:</b> Claim +1 free credit every 24 hours to build your streak.</p>
           </div>
         </div>
       </section>

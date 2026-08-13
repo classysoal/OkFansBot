@@ -1,6 +1,7 @@
 /**
  * OkFans VIP Club Mini App JavaScript Engine
  * Authoritative Telegram Identity -> Session -> Aggregated Dashboard Pipeline.
+ * Mini App-First Architecture with Deep Links & BackButton Navigation.
  */
 
 const tg = window.Telegram?.WebApp;
@@ -10,11 +11,13 @@ const API_BASE = window.location.hostname.includes("vercel.app")
 
 let toastTimer = null;
 let currentSessionToken = localStorage.getItem("okfans_session_token") || null;
+let currentViewHistory = ["view-home"];
 
 document.addEventListener("DOMContentLoaded", async () => {
   if (tg) {
     tg.expand();
     tg.ready();
+    setupTelegramNativeUI();
   }
   
   checkUrlAuthStatus();
@@ -27,6 +30,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   
   // Load fresh authoritative dashboard data
   await loadDashboardData();
+  
+  // Process Deep-Link Start Parameter
+  processStartParameter();
 });
 
 function getInitData() {
@@ -56,6 +62,40 @@ function showToast(message, type = "info", icon = "ℹ️") {
   toastTimer = setTimeout(() => {
     toast.className = "toast-notification";
   }, 3500);
+}
+
+function setupTelegramNativeUI() {
+  if (!tg) return;
+
+  if (tg.BackButton) {
+    tg.BackButton.onClick(() => {
+      handleNativeBack();
+    });
+  }
+
+  if (tg.themeParams) {
+    if (tg.themeParams.bg_color) document.documentElement.style.setProperty("--bg-color", tg.themeParams.bg_color);
+    if (tg.themeParams.text_color) document.documentElement.style.setProperty("--text-main", tg.themeParams.text_color);
+  }
+}
+
+function processStartParameter() {
+  const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) 
+    || new URLSearchParams(window.location.search).get("startapp")
+    || new URLSearchParams(window.location.search).get("start_param");
+
+  if (!startParam) return;
+
+  const param = startParam.toLowerCase();
+  if (param === "verify" || param === "quest") {
+    switchTab("view-verification");
+  } else if (param === "invite" || param === "ref" || param.startsWith("ref_")) {
+    switchTab("view-referrals");
+  } else if (param === "vip" || param === "tiers") {
+    switchTab("view-tiers");
+  } else if (param === "profile") {
+    switchTab("view-profile");
+  }
 }
 
 function checkUrlAuthStatus() {
@@ -354,11 +394,131 @@ function copyRefLink() {
   showToast("Referral link copied to clipboard!", "success", "📋");
 }
 
-function switchTab(viewId, btnEl) {
+function switchTab(viewId, btnEl = null, pushHistory = true) {
   document.querySelectorAll(".tab-view").forEach(v => v.classList.remove("active"));
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
   
   const target = document.getElementById(viewId);
   if (target) target.classList.add("active");
   if (btnEl) btnEl.classList.add("active");
+
+  if (pushHistory && currentViewHistory[currentViewHistory.length - 1] !== viewId) {
+    currentViewHistory.push(viewId);
+  }
+
+  if (tg && tg.BackButton) {
+    if (viewId !== "view-home") {
+      tg.BackButton.show();
+    } else {
+      tg.BackButton.hide();
+    }
+  }
+}
+
+function handleNativeBack() {
+  if (currentViewHistory.length > 1) {
+    currentViewHistory.pop();
+    const prevView = currentViewHistory[currentViewHistory.length - 1];
+    switchTab(prevView, null, false);
+  } else {
+    switchTab("view-home", null, false);
+  }
+
+  if (currentViewHistory.length <= 1 && tg && tg.BackButton) {
+    tg.BackButton.hide();
+  }
+}
+
+function openSubScreen(viewId) {
+  triggerHaptic("success");
+  switchTab(viewId);
+
+  if (viewId === "view-history-verif") loadVerificationHistory();
+  if (viewId === "view-history-rewards") loadRewardHistory();
+  if (viewId === "view-history-referrals") loadReferralHistory();
+}
+
+async function loadVerificationHistory() {
+  const container = document.getElementById("verifHistoryList");
+  if (!container) return;
+  try {
+    const res = await apiFetch("/api/user/history/verification");
+    if (!res.history || res.history.length === 0) {
+      container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No verification history recorded.</div>`;
+      return;
+    }
+    let html = "";
+    res.history.forEach(item => {
+      html += `
+        <div class="activity-item">
+          <span class="activity-icon">🔒</span>
+          <div class="activity-details">
+            <span class="activity-title">${item.channel_title || 'Community Check'}</span>
+            <span class="activity-time">${item.checked_at || 'Recent'}</span>
+          </div>
+          <span class="badge ${item.application_result === 'PASS' ? 'badge-success' : 'badge-warning'}">${item.application_result}</span>
+        </div>
+      `;
+    });
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div style="font-size:12px; color:#ef4444; padding:8px;">Failed to load history.</div>`;
+  }
+}
+
+async function loadRewardHistory() {
+  const container = document.getElementById("rewardHistoryList");
+  if (!container) return;
+  try {
+    const res = await apiFetch("/api/user/history/rewards");
+    if (!res.history || res.history.length === 0) {
+      container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No reward transactions recorded.</div>`;
+      return;
+    }
+    let html = "";
+    res.history.forEach(item => {
+      const isPos = item.amount > 0;
+      html += `
+        <div class="activity-item">
+          <span class="activity-icon">${isPos ? '🪙' : '🎁'}</span>
+          <div class="activity-details">
+            <span class="activity-title">${item.reason}</span>
+            <span class="activity-time">${item.created_at || 'Recent'}</span>
+          </div>
+          <span class="badge ${isPos ? 'badge-success' : 'badge-info'}">${isPos ? '+' : ''}${item.amount} Credits</span>
+        </div>
+      `;
+    });
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div style="font-size:12px; color:#ef4444; padding:8px;">Failed to load ledger history.</div>`;
+  }
+}
+
+async function loadReferralHistory() {
+  const container = document.getElementById("referralHistoryList");
+  if (!container) return;
+  try {
+    const res = await apiFetch("/api/user/history/referrals");
+    if (!res.history || res.history.length === 0) {
+      container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No referrals invited yet. Share your link!</div>`;
+      return;
+    }
+    let html = "";
+    res.history.forEach(item => {
+      html += `
+        <div class="activity-item">
+          <span class="activity-icon">👤</span>
+          <div class="activity-details">
+            <span class="activity-title">${item.first_name || 'Invited User'} (@${item.username || 'user'})</span>
+            <span class="activity-time">${item.created_at || 'Recent'}</span>
+          </div>
+          <span class="badge ${item.status === 'verified' ? 'badge-success' : 'badge-warning'}">${item.status}</span>
+        </div>
+      `;
+    });
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div style="font-size:12px; color:#ef4444; padding:8px;">Failed to load referral breakdown.</div>`;
+  }
 }

@@ -1527,3 +1527,59 @@ def revoke_user_session(session_id: str) -> bool:
         return False
     finally:
         conn.close()
+
+def get_user_credit_history(user_id: int, limit: int = 20) -> list:
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, amount, reason, created_at
+            FROM credit_ledger
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (user_id, limit))
+        return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logging.error(f"Error in get_user_credit_history for user {user_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_user_verification_history(user_id: int, limit: int = 20) -> list:
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT v.id, v.channel_db_id, v.telegram_status, v.application_result, v.checked_at, r.title as channel_title
+            FROM verification_checks v
+            LEFT JOIN required_channels r ON v.channel_db_id = r.id
+            WHERE v.user_id = %s
+            ORDER BY v.checked_at DESC
+            LIMIT %s
+        """, (user_id, limit))
+        return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logging.error(f"Error in get_user_verification_history for user {user_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_user_referral_history(user_id: int, limit: int = 20) -> list:
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT r.id, r.referred_user_id, r.status, r.created_at, u.username, u.first_name
+            FROM referrals r
+            LEFT JOIN users u ON r.referred_user_id = u.user_id
+            WHERE r.inviter_user_id = %s
+            ORDER BY r.created_at DESC
+            LIMIT %s
+        """, (user_id, limit))
+        return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logging.error(f"Error in get_user_referral_history for user {user_id}: {e}")
+        return []
+    finally:
+        conn.close()

@@ -455,6 +455,24 @@ def get_referrals(current_user: dict = Depends(get_current_user)):
         "standard_credits": 3
     }
 
+@app.get("/api/user/history/rewards")
+def get_user_reward_history(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    ledger = database.get_user_credit_history(user_id, limit=20)
+    return {"success": True, "history": ledger}
+
+@app.get("/api/user/history/verification")
+def get_user_verification_history(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    history = database.get_user_verification_history(user_id, limit=20)
+    return {"success": True, "history": history}
+
+@app.get("/api/user/history/referrals")
+def get_user_referral_history(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    history = database.get_user_referral_history(user_id, limit=20)
+    return {"success": True, "history": history}
+
 @app.post("/api/rewards/claim-daily")
 def claim_daily_reward(current_user: dict = Depends(get_current_user)):
     res = database.claim_daily_checkin(current_user["user_id"])
