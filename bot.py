@@ -815,52 +815,57 @@ async def handle_incoming_messages(update: Update, context: ContextTypes.DEFAULT
             await update.effective_message.reply_text("Upload mode is active. Send a Telegram video, or use /cancel.")
             return
     
-    # Forwarded channel resolver for owner
-    if user_id == OWNER_ID and update.message and update.message.forward_from_chat:
-        forward_chat = update.message.forward_from_chat
-        if forward_chat.type == "channel":
-            channel_id = forward_chat.id
-            channel_title = forward_chat.title
+    # Forwarded channel resolver for owner (v20+ compatible)
+    forward_chat = getattr(update.message, 'forward_from_chat', None) if update.message else None
+    if not forward_chat and update.message and hasattr(update.message, 'forward_origin'):
+        origin = update.message.forward_origin
+        if getattr(origin, 'type', None) in ['chat', 'channel']:
+            forward_chat = getattr(origin, 'chat', None)
+
+    if user_id == OWNER_ID and forward_chat and getattr(forward_chat, 'type', None) == "channel":
+        channel_id = forward_chat.id
+        channel_title = getattr(forward_chat, 'title', '')
+
+        active_channels = database.get_required_channels(only_active=False)
+        matched = None
+        
+        def normalize(s):
+            return "".join(c for c in s if c.isalnum()).lower() if s else ""
             
-            active_channels = database.get_required_channels(only_active=False)
-            matched = None
-            
-            def normalize(s):
-                return "".join(c for c in s if c.isalnum()).lower() if s else ""
+        norm_title = normalize(channel_title)
+        for ch in active_channels:
+            if normalize(ch["title"]) == norm_title or normalize(ch["label"]) == norm_title:
+                matched = ch
+                break
                 
-            norm_title = normalize(channel_title)
-            for ch in active_channels:
-                if normalize(ch["title"]) == norm_title or normalize(ch["label"]) == norm_title:
-                    matched = ch
-                    break
-                    
-            if matched:
-                db_id = matched["id"]
-                conn = database.get_db_connection()
-                try:
-                    with conn:
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE required_channels SET channel_id = %s WHERE id = %s", (channel_id, db_id))
-                    await update.message.reply_html(
-                        f"✅ <b>Successfully linked!</b>\n\n• Channel: <b>{channel_title}</b>\n• Linked to: <b>{matched['label']}</b>\n• Resolved ID: <code>{channel_id}</code>"
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating channel ID: {e}")
-                    await update.message.reply_text("Error updating database.")
-                finally:
-                    conn.close()
+        if matched:
+            db_id = matched["id"]
+            conn = database.get_db_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE required_channels SET channel_id = %s WHERE id = %s", (channel_id, db_id))
+                await update.message.reply_html(
+                    f"✅ <b>Successfully linked!</b>\n\n• Channel: <b>{channel_title}</b>\n• Linked to: <b>{matched['label']}</b>\n• Resolved ID: <code>{channel_id}</code>"
+                )
+            except Exception as e:
+                logger.error(f"Error updating channel ID: {e}")
+                await update.message.reply_text("Error updating database.")
+            finally:
+                conn.close()
+        else:
+            unlinked = [ch for ch in active_channels if ch["channel_id"] is None]
+            if unlinked:
+                keyboard = [[InlineKeyboardButton(ch["label"], callback_data=f"link_{ch['id']}_{channel_id}")] for ch in unlinked]
+                keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="btn_admin_cancel")])
+                await update.message.reply_html(
+                    f"ℹ️ <b>Forwarded Channel detected:</b>\n• Title: <b>{channel_title}</b>\n• ID: <code>{channel_id}</code>\n\nSelect required channel to link:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
             else:
-                unlinked = [ch for ch in active_channels if ch["channel_id"] is None]
-                if unlinked:
-                    keyboard = [[InlineKeyboardButton(ch["label"], callback_data=f"link_{ch['id']}_{channel_id}")] for ch in unlinked]
-                    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="btn_admin_cancel")])
-                    await update.message.reply_html(
-                        f"ℹ️ <b>Forwarded Channel detected:</b>\n• Title: <b>{channel_title}</b>\n• ID: <code>{channel_id}</code>\n\nSelect required channel to link:",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
-                else:
-                    await update.message.reply_html(f"ℹ️ Channel: <b>{channel_title}</b> (ID: <code>{channel_id}</code>). All channels already resolved.")
-            return
+                await update.message.reply_html(f"ℹ️ Channel: <b>{channel_title}</b> (ID: <code>{channel_id}</code>). All channels already resolved.")
+        return
+
 
     if not await check_user_access(update, context):
         return

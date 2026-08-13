@@ -70,12 +70,16 @@ def get_db_connection():
             conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=10)
             return conn
         except Exception as e:
-            logging.warning(f"⚠️ PostgreSQL connection temporary issue: {e}. Using local SQLite fallback for this query.")
+            logging.error(f"❌ PostgreSQL Connection Failure: {e}")
+            if os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER"):
+                raise RuntimeError(f"CRITICAL: Production PostgreSQL connection failed: {e}")
+            logging.warning("⚠️ Using local SQLite fallback in development mode.")
 
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return SQLiteConnectionWrapper(conn)
+
 
 def init_db():
     logging.info(f"Initializing database (Postgres mode: {IS_POSTGRES})...")
@@ -816,6 +820,10 @@ def save_user_last_bundle(user_id: int, video_list: list) -> bool:
         return False
     finally:
         conn.close()
+
+# Alias for backwards compatibility
+save_last_bundle = save_user_last_bundle
+
 
 def get_user_last_bundle(user_id: int) -> dict:
     conn = get_db_connection()

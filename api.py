@@ -620,11 +620,16 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                 )
                 if res.status_code == 200:
                     delivered_count += 1
-                    database.record_video_delivery(user_id, video["video_id"], user_id, res.json().get("result", {}).get("message_id", 0), expiry_delay)
+                    canonical_vid = video.get("video_id") or video.get("id") or 0
+                    msg_id = res.json().get("result", {}).get("message_id", 0)
+                    if canonical_vid > 0:
+                        database.record_video_delivery(user_id, canonical_vid, user_id, msg_id, expiry_delay)
+                    else:
+                        logger.warning(f"[{req_id}] Missing canonical video_id for video file {video.get('file_id')}")
                 else:
-                    logger.warning(f"[{req_id}] Telegram sendVideo returned HTTP {res.status_code}: {res.text}")
+                    logger.warning(f"[{req_id}] Telegram sendVideo returned HTTP {res.status_code}")
             except Exception as e:
-                logger.error(f"[{req_id}] Telegram sendVideo exception for video {video['video_id']} to user {user_id}: {e}")
+                logger.error(f"[{req_id}] Telegram sendVideo exception for user {user_id}: {e}")
 
     # If delivery failed completely, refund credit safely
     if delivered_count == 0:
@@ -642,7 +647,8 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    database.save_last_bundle(user_id, [v["video_id"] for v in delivered_videos])
+    # Use correct database function: save_user_last_bundle
+    database.save_user_last_bundle(user_id, [v.get("video_id") or v.get("id") for v in delivered_videos if (v.get("video_id") or v.get("id"))])
     database.increment_claimed_count(user_id)
     
     updated_user = database.get_user(user_id)
@@ -657,6 +663,7 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
         },
         "request_id": req_id
     }
+
 
 
 @app.post("/api/verification/check")
