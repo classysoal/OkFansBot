@@ -127,9 +127,10 @@ def validate_telegram_init_data(init_data: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Telegram initData")
         
     try:
-        from urllib.parse import parse_qsl
+        from urllib.parse import parse_qsl, unquote
         parsed_data = dict(parse_qsl(init_data, keep_blank_values=True))
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to parse initData: {e}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid initData format")
         
     received_hash = parsed_data.pop("hash", None)
@@ -141,6 +142,7 @@ def validate_telegram_init_data(init_data: str) -> dict:
     if auth_date:
         try:
             if time.time() - int(auth_date) > 86400:
+                logger.warning(f"Expired auth_date: {auth_date}")
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired initData auth_date")
         except ValueError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth_date")
@@ -149,16 +151,26 @@ def validate_telegram_init_data(init_data: str) -> dict:
     data_check_arr = [f"{k}={v}" for k, v in sorted(parsed_data.items())]
     data_check_string = "\n".join(data_check_arr)
 
-    # Compute secret key = HMAC-SHA256("WebAppData", bot_token)
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+    token = (os.getenv("TG_BOT_TOKEN") or "8938399688:AAHPaPDM5qCZyJA0X1ccLiQP45yuQPDB8Uo").strip()
+    secret_key = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
     computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(computed_hash.lower(), received_hash.lower()):
-        # Fallback for dev mode / testing environment
-        if os.getenv("ENVIRONMENT") == "development" and "user" in parsed_data:
-            logger.warning("Development mode bypassing HMAC verification")
+        # Try raw pair parsing fallback
+        raw_pairs = [p.split("=", 1) for p in init_data.split("&") if "=" in p]
+        raw_dict = {p[0]: unquote(p[1]) if len(p) > 1 else "" for p in raw_pairs if p[0] != "hash"}
+        raw_check_arr = [f"{k}={v}" for k, v in sorted(raw_dict.items())]
+        raw_check_string = "\n".join(raw_check_arr)
+        raw_computed_hash = hmac.new(secret_key, raw_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
+        if hmac.compare_digest(raw_computed_hash.lower(), received_hash.lower()):
+            computed_hash = raw_computed_hash
         else:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid initData signature")
+            logger.warning(f"HMAC mismatch: computed={computed_hash.lower()} vs received={received_hash.lower()}")
+            if os.getenv("ENVIRONMENT") == "development" and "user" in parsed_data:
+                logger.warning("Development mode bypassing HMAC verification")
+            else:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid initData signature")
 
     user_json = parsed_data.get("user")
     if not user_json:
@@ -167,8 +179,10 @@ def validate_telegram_init_data(init_data: str) -> dict:
     try:
         user_data = json.loads(user_json)
         return user_data
-    except Exception:
+    except Exception as e:
+        logger.error(f"Malformed user JSON: {user_json}, error: {e}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Malformed user JSON in initData")
+
 
 
 # --- AUTHENTICATION DEPENDENCY & PIPELINE ---
