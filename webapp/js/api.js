@@ -11,7 +11,8 @@ const API_BASE = window.location.hostname.includes('vercel.app')
   ? 'https://okfansbot-826r.onrender.com'
   : window.location.origin;
 
-const REQUEST_TIMEOUT_MS = 12000;
+const REQUEST_TIMEOUT_MS = 25000;
+
 
 // In-flight deduplication map: url -> Promise
 const _inFlight = new Map();

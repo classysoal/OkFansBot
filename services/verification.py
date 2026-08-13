@@ -136,24 +136,29 @@ class VerificationService:
     @staticmethod
     async def evaluate_user_verification(user_id: int, required_channels: list, bot_token: str) -> dict:
         """
-        Evaluates all required communities for a user in parallel.
+        Evaluates all required communities for a user concurrently in parallel.
         Returns aggregated result with overall status (PASS, INCOMPLETE, CHECK_ERROR).
         """
-        results = []
+        import asyncio
+        
+        async with httpx.AsyncClient() as client:
+            tasks = [
+                VerificationService._check_channel_with_client(client, user_id, ch, bot_token)
+                for ch in required_channels
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+
         passed_count = 0
         has_error = False
 
-        for ch in required_channels:
-            res = await VerificationService.check_user_community(user_id, ch, bot_token)
-            results.append(res)
-            
+        for res in results:
             if res["application_result"] == ApplicationResult.PASS:
                 passed_count += 1
             elif res["application_result"] == ApplicationResult.ERROR:
                 has_error = True
 
         total_required = len(required_channels)
-        all_passed = (passed_count == total_required)
+        all_passed = (passed_count == total_required and total_required > 0)
 
         if all_passed:
             overall = "PASS"
@@ -174,6 +179,100 @@ class VerificationService:
             "all_passed": all_passed,
             "requirements": results
         }
+
+    @staticmethod
+    async def _check_channel_with_client(client: httpx.AsyncClient, user_id: int, channel: dict, bot_token: str = None) -> dict:
+        db_id = channel["id"]
+        cid = channel.get("channel_id")
+        title = channel.get("title", f"Channel {channel.get('label', '')}")
+
+        telegram_status = TelegramStatus.NOT_JOINED
+        app_result = ApplicationResult.FAIL
+        reason = "User is not a member of this community"
+
+        evt = database.get_join_event(user_id, db_id)
+
+        if cid and bot_token:
+            try:
+                res = await client.get(
+                    f"https://api.telegram.org/bot{bot_token}/getChatMember",
+                    params={"chat_id": cid, "user_id": user_id},
+                    timeout=4.0
+                )
+                if res.status_code == 200 and res.json().get("ok"):
+                    member_status = res.json().get("result", {}).get("status")
+                    if member_status in ["creator", "owner"]:
+                        telegram_status = TelegramStatus.OWNER
+                        app_result = ApplicationResult.PASS
+                        reason = "User is community owner"
+                    elif member_status == "administrator":
+                        telegram_status = TelegramStatus.ADMINISTRATOR
+                        app_result = ApplicationResult.PASS
+                        reason = "User is community administrator"
+                    elif member_status in ["member", "restricted"]:
+                        telegram_status = TelegramStatus.MEMBER
+                        app_result = ApplicationResult.PASS
+                        reason = "Live Telegram verification active member"
+                    elif member_status == "left":
+                        telegram_status = TelegramStatus.LEFT
+                        app_result = ApplicationResult.FAIL
+                        reason = "Membership no longer active"
+                    elif member_status == "kicked":
+                        telegram_status = TelegramStatus.BANNED
+                        app_result = ApplicationResult.FAIL
+                        reason = "User is banned from community"
+                elif evt and evt.get("status") in ["joined", "approved"]:
+                    telegram_status = TelegramStatus.MEMBER
+                    app_result = ApplicationResult.PASS
+                    reason = "Verified via join history"
+                elif evt and evt.get("status") == "requested":
+                    telegram_status = TelegramStatus.REQUEST_PENDING
+                    app_result = ApplicationResult.PASS
+                    reason = "Join request registered (accepted by policy)"
+            except Exception as e:
+                logger.warning(f"Check exception for channel {cid}: {e}")
+                if evt and evt.get("status") in ["joined", "approved", "requested"]:
+                    telegram_status = TelegramStatus.MEMBER if evt.get("status") != "requested" else TelegramStatus.REQUEST_PENDING
+                    app_result = ApplicationResult.PASS
+                    reason = "Fallback to event history on API timeout"
+                else:
+                    telegram_status = TelegramStatus.CHECK_ERROR
+                    app_result = ApplicationResult.ERROR
+                    reason = "Telegram API check failed"
+        else:
+            if evt and evt.get("status") == "requested":
+                telegram_status = TelegramStatus.REQUEST_PENDING
+                app_result = ApplicationResult.PASS
+                reason = "Join request registered (accepted by policy)"
+            elif evt and evt.get("status") in ["joined", "approved"]:
+                telegram_status = TelegramStatus.MEMBER
+                app_result = ApplicationResult.PASS
+                reason = "Verified via join history"
+            else:
+                telegram_status = TelegramStatus.NOT_JOINED
+                app_result = ApplicationResult.FAIL
+                reason = "Membership or join request required"
+
+        try:
+            database.record_verification_check(
+                user_id=user_id,
+                community_id=db_id,
+                telegram_status=telegram_status,
+                application_result=app_result,
+                reason=reason
+            )
+        except Exception:
+            pass
+
+        return {
+            "channel_id": db_id,
+            "title": title,
+            "invite_link": channel.get("invite_link", ""),
+            "telegram_status": telegram_status,
+            "application_result": app_result,
+            "reason": reason
+        }
+
 
 class StateMachine:
     NEW = "NEW"
