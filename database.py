@@ -687,30 +687,19 @@ def init_db():
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);")
 
-    # Seed initial sample video catalog if videos table is empty
+    # Clean up dummy placeholder videos if real uploaded videos exist in database
     try:
-        cursor.execute("SELECT COUNT(*) as cnt FROM videos;")
+        cursor.execute("SELECT COUNT(*) as real_cnt FROM videos WHERE file_id NOT LIKE 'BAACAgUAAxkBAA%';")
         row = cursor.fetchone()
-        cnt = int(dict(row).get('cnt', 0)) if row else 0
-        if cnt == 0:
-            logging.info("Seeding initial 5 sample videos into catalog...")
-            sample_videos = [
-                ("BAACAgUAAxkBAAIBZ1234567890", "🔥 VIP Exclusive Reward #1", "A", 1),
-                ("BAACAgUAAxkBAAICZ1234567891", "🔥 VIP Exclusive Reward #2", "A", 2),
-                ("BAACAgUAAxkBAAIDZ1234567892", "🔥 VIP Exclusive Reward #3", "A", 3),
-                ("BAACAgUAAxkBAAIEZ1234567893", "🔥 VIP Exclusive Reward #4", "A", 4),
-                ("BAACAgUAAxkBAAIFZ1234567894", "🔥 VIP Exclusive Reward #5", "A", 5),
-            ]
-            for file_id, caption, vault, idx in sample_videos:
-                cursor.execute(
-                    "INSERT INTO videos (file_id, caption, vault, idx, is_active) VALUES (%s, %s, %s, %s, 1)",
-                    (file_id, caption, vault, idx)
-                )
+        real_cnt = int(dict(row).get('real_cnt', 0)) if row else 0
+        if real_cnt > 0:
+            cursor.execute("DELETE FROM videos WHERE file_id LIKE 'BAACAgUAAxkBAA%';")
     except Exception as e:
-        logging.warning(f"Note on initial video seeding: {e}")
+        logging.warning(f"Note on dummy video cleanup: {e}")
 
     conn.commit()
     conn.close()
+
 
     logging.info("Database initialized successfully.")
     
