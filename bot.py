@@ -190,15 +190,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sent_msg:
         database.update_last_menu_message(user_id, sent_msg.message_id)
 
+    # v2.0: Bot is the communication/entry layer.
+    # The Mini App (via home_kb inline buttons and reply keyboard) is the primary interface.
+    # The reply keyboard below gives quick persistent access to the app.
     try:
+        nav_text = (
+            "📱 <b>Your VIP Dashboard is ready.</b>\n\n"
+            "Tap <b>🚀 Open VIP App</b> below to launch your full dashboard — "
+            "view credits, complete quests, invite friends, and redeem rewards."
+        )
+        if not is_completed:
+            nav_text += "\n\n⚡ <i>New member? Open the App and complete your VIP Verification Quest first!</i>"
         await context.bot.send_message(
             chat_id=user_id,
-            text="📱 <i>Navigation Menu Loaded Below</i>",
+            text=nav_text,
             parse_mode="HTML",
             reply_markup=get_main_reply_keyboard(is_owner=(user_id == OWNER_ID))
         )
     except Exception:
         pass
+
 
     asyncio.create_task(delete_after_delay(context.bot, update.effective_chat.id, update.effective_message.message_id, delay=10))
 

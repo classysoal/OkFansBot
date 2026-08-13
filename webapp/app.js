@@ -1,524 +1,116 @@
 /**
- * OkFans VIP Club Mini App JavaScript Engine
- * Authoritative Telegram Identity -> Session -> Aggregated Dashboard Pipeline.
- * Mini App-First Architecture with Deep Links & BackButton Navigation.
+ * OkFansBot v2.0 Mini App — Main Orchestrator
+ * Thin entry point. Business logic lives in screen modules and services.
  */
+import AppState from './js/state.js';
+import TelegramSDK from './js/telegram.js';
+import Cache from './js/cache.js';
+import ApiClient from './js/api.js';
+import Router from './js/router.js';
+import { showToast } from './js/components/toast.js';
 
-const tg = window.Telegram?.WebApp;
-const API_BASE = window.location.hostname.includes("vercel.app") 
-  ? "https://okfansbot-826r.onrender.com" 
-  : window.location.origin;
+// Screen modules
+import * as HomeScreen from './js/screens/home.js';
+import * as VerificationScreen from './js/screens/verification.js';
+import * as VipScreen from './js/screens/vip.js';
+import * as InviteScreen from './js/screens/invite.js';
+import * as ProfileScreen from './js/screens/profile.js';
+import * as HistoryRewardsScreen from './js/screens/history_rewards.js';
+import * as HistoryVerifScreen from './js/screens/history_verification.js';
+import * as HistoryReferralsScreen from './js/screens/history_referrals.js';
+import * as NotificationsScreen from './js/screens/notifications.js';
+import * as SettingsScreen from './js/screens/settings.js';
 
-let toastTimer = null;
-let currentSessionToken = localStorage.getItem("okfans_session_token") || null;
-let currentViewHistory = ["view-home"];
+const SCREENS = {
+  home: HomeScreen,
+  verification: VerificationScreen,
+  vip: VipScreen,
+  invite: InviteScreen,
+  profile: ProfileScreen,
+  'history-rewards': HistoryRewardsScreen,
+  'history-verification': HistoryVerifScreen,
+  'history-referrals': HistoryReferralsScreen,
+  notifications: NotificationsScreen,
+  settings: SettingsScreen,
+};
 
-document.addEventListener("DOMContentLoaded", async () => {
-  if (tg) {
-    tg.expand();
-    tg.ready();
-    setupTelegramNativeUI();
-  }
-  
-  checkUrlAuthStatus();
-  loadCachedState();
-  
-  // Authenticate silently if initData is present
-  if (getInitData()) {
-    await authenticateMiniApp();
-  }
-  
-  // Load fresh authoritative dashboard data
-  await loadDashboardData();
-  
-  // Process Deep-Link Start Parameter
-  processStartParameter();
-});
+async function bootstrap() {
+  // 1. Init Telegram SDK (theme, viewport, safe-area)
+  TelegramSDK.init();
 
-function getInitData() {
-  return tg ? tg.initData : "";
-}
-
-function triggerHaptic(type = "success") {
-  if (tg && tg.HapticFeedback) {
-    try {
-      tg.HapticFeedback.notificationOccurred(type);
-    } catch (e) {}
-  }
-}
-
-function showToast(message, type = "info", icon = "ℹ️") {
-  const toast = document.getElementById("toast");
-  const toastText = document.getElementById("toastText");
-  const toastIcon = document.getElementById("toastIcon");
-
-  if (!toast || !toastText) return;
-
-  toastText.textContent = message;
-  toastIcon.textContent = icon;
-  toast.className = `toast-notification toast-${type} show`;
-
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toast.className = "toast-notification";
-  }, 3500);
-}
-
-function setupTelegramNativeUI() {
-  if (!tg) return;
-
-  if (tg.BackButton) {
-    tg.BackButton.onClick(() => {
-      handleNativeBack();
-    });
+  // 2. Check URL for session token (Telegram OIDC callback)
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlToken = urlParams.get('session_token');
+  if (urlToken) {
+    Cache.setSession(urlToken);
+    if (urlParams.get('auth') === 'success') showToast('Logged in successfully', 'success');
   }
 
-  if (tg.themeParams) {
-    if (tg.themeParams.bg_color) document.documentElement.style.setProperty("--bg-color", tg.themeParams.bg_color);
-    if (tg.themeParams.text_color) document.documentElement.style.setProperty("--text-main", tg.themeParams.text_color);
-  }
-}
-
-function processStartParameter() {
-  const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) 
-    || new URLSearchParams(window.location.search).get("startapp")
-    || new URLSearchParams(window.location.search).get("start_param");
-
-  if (!startParam) return;
-
-  const param = startParam.toLowerCase();
-  if (param === "verify" || param === "quest") {
-    switchTab("view-verification");
-  } else if (param === "invite" || param === "ref" || param.startsWith("ref_")) {
-    switchTab("view-referrals");
-  } else if (param === "vip" || param === "tiers") {
-    switchTab("view-tiers");
-  } else if (param === "profile") {
-    switchTab("view-profile");
-  }
-}
-
-function checkUrlAuthStatus() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get("session_token");
-  if (token) {
-    currentSessionToken = token;
-    localStorage.setItem("okfans_session_token", token);
-  }
-  
-  if (params.get("auth") === "success") {
-    showToast("Telegram OAuth login successful!", "success", "🎉");
-    triggerHaptic("success");
-  } else if (params.get("auth_error")) {
-    showToast("Telegram Login error: " + params.get("auth_error"), "error", "⚠️");
-    triggerHaptic("error");
+  // 3. Authenticate via initData (primary Mini App auth path)
+  const initData = TelegramSDK.getInitData();
+  if (initData) {
+    AppState.set('auth.status', 'authenticating');
+    const authResult = await ApiClient.auth(initData);
+    if (authResult.ok) {
+      Cache.setSession(authResult.data.session_token);
+      AppState.set('auth.status', 'authenticated');
+    } else if (authResult.error === 'AUTH_REQUIRED' || authResult.error === 'AUTH_EXPIRED') {
+      Cache.clearSession();
+      AppState.set('auth.status', 'failed');
+    }
+  } else if (Cache.getSession()) {
+    AppState.set('auth.status', 'authenticated');
   }
 
-  checkAuthenticationState();
-}
-
-function checkAuthenticationState() {
-  const hasInitData = Boolean(getInitData());
-  const hasSession = Boolean(currentSessionToken);
-  const overlay = document.getElementById("auth-overlay");
-
-  if (!hasInitData && !hasSession) {
-    if (overlay) overlay.style.display = "flex";
-  } else {
-    if (overlay) overlay.style.display = "none";
+  // 4. Show auth overlay if no auth available
+  const overlay = document.getElementById('auth-overlay');
+  if (AppState.auth.status !== 'authenticated' && !Cache.getSession() && !initData) {
+    if (overlay) overlay.style.display = 'flex';
+    return;
   }
-}
+  if (overlay) overlay.style.display = 'none';
 
-function loginWithTelegram() {
-  triggerHaptic("success");
-  if (tg && tg.initData) {
-    authenticateMiniApp().then(() => {
-      checkAuthenticationState();
-      loadDashboardData();
-    });
-  } else {
-    window.location.href = "https://t.me/OkFansBot/app";
+  // 5. Init all screen modules
+  for (const [id, screen] of Object.entries(SCREENS)) {
+    const container = document.getElementById(`view-${id}`);
+    if (container && screen.init) screen.init(container);
   }
-}
 
-async function authenticateMiniApp() {
-  const rawInitData = getInitData();
-  if (!rawInitData) return;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/auth/miniapp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData: rawInitData })
-    });
-    
-    if (res.ok) {
-      const data = await res.json();
-      if (data.session_token) {
-        currentSessionToken = data.session_token;
-        localStorage.setItem("okfans_session_token", data.session_token);
+  // 6. Wire bottom nav clicks
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      if (tab) {
+        AppState.ui.screenStack = [tab];
+        Router.navigate(tab, { replace: true });
+        const screen = SCREENS[tab];
+        if (screen?.load) screen.load();
       }
-    }
-  } catch (err) {
-    console.warn("Silent MiniApp auth warning:", err);
-  }
-}
-
-function loadCachedState() {
-  try {
-    const cached = localStorage.getItem("okfans_dashboard_cache");
-    if (cached) {
-      const data = JSON.parse(cached);
-      renderDashboard(data, true);
-    }
-  } catch (e) {}
-}
-
-async function apiFetch(endpoint, options = {}) {
-  const headers = options.headers || {};
-  headers["X-Telegram-Init-Data"] = getInitData();
-  if (currentSessionToken) {
-    headers["Authorization"] = `Bearer ${currentSessionToken}`;
-  }
-  
-  try {
-    const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: "API Error" }));
-      throw new Error(err.detail || "Server request failed");
-    }
-    return await res.json();
-  } catch (err) {
-    console.error(`API Fetch Error [${endpoint}]:`, err);
-    throw err;
-  }
-}
-
-async function loadDashboardData() {
-  try {
-    const data = await apiFetch("/api/dashboard");
-    localStorage.setItem("okfans_dashboard_cache", JSON.stringify(data));
-    renderDashboard(data, false);
-  } catch (err) {
-    console.warn("Failed to fetch live dashboard:", err);
-  }
-}
-
-function renderDashboard(data, isFromCache = false) {
-  const user = data.user || {};
-  const vip = data.vip || {};
-  const ref = data.referrals || {};
-  const verif = data.verification || {};
-  const act = data.recent_activity || [];
-
-  // 1. Header Info
-  document.getElementById("userName").textContent = user.first_name || "VIP User";
-  document.getElementById("vipRank").textContent = `${vip.badge || '🌟'} ${vip.title || 'Novice VIP'}`;
-  document.getElementById("userCredits").textContent = user.credits !== undefined ? user.credits : 0;
-  
-  const avatarInit = (user.first_name || "VIP").substring(0, 3).toUpperCase();
-  document.getElementById("userAvatar").textContent = avatarInit;
-  document.getElementById("profAvatar").textContent = avatarInit;
-
-  // 2. Home Progress Card
-  document.getElementById("homeRankTitle").textContent = `${vip.badge || '🌟'} ${vip.title || 'Novice VIP'}`;
-  document.getElementById("homeRankTarget").textContent = `Target: ${vip.next_target || 'Silver VIP'}`;
-  document.getElementById("homeProgressBar").style.width = `${vip.progress_pct || 0}%`;
-  document.getElementById("homeProgressFooter").innerHTML = `
-    <span>${ref.verified_count || 0} verified referrals</span>
-    <span>${vip.invites_needed || 0} more needed</span>
-  `;
-
-  // 3. Quest / Verification Center
-  document.getElementById("questProgressBadge").textContent = `${verif.completed_count || 0} / ${verif.total_required || 0} Completed`;
-  renderVerificationList(verif.requirements || verif.channels || []);
-
-  // 4. VIP Tiers Progress
-  document.getElementById("currentVipTitle").textContent = vip.title || "Novice VIP";
-  document.getElementById("vipProgressBar").style.width = `${vip.progress_pct || 0}%`;
-  document.getElementById("vipProgressSub").textContent = `Next Target: ${vip.next_target || 'Silver VIP'} (${vip.invites_needed || 0} invite needed)`;
-
-  // 5. Referrals / Invite Center
-  document.getElementById("refLinkInput").value = ref.ref_link || "https://t.me/OkFansBot";
-  document.getElementById("refStatInvited").textContent = ref.verified_count || 0;
-  document.getElementById("refStatQualified").textContent = ref.qualified_count || 0;
-
-  // 6. Profile View
-  document.getElementById("profName").textContent = user.first_name || "VIP User";
-  document.getElementById("profRankBadge").textContent = `${vip.badge || '🌟'} ${vip.title || 'Novice VIP'}`;
-  document.getElementById("profId").textContent = user.user_id || "-";
-  document.getElementById("profCredits").textContent = `${user.credits !== undefined ? user.credits : 0} 🪙`;
-  document.getElementById("profStreak").textContent = `${user.checkin_streak || 0} Days 🔥`;
-  document.getElementById("profInvites").textContent = `${ref.verified_count || 0} 👥`;
-
-  // 7. Activity List
-  renderActivityList(act);
-}
-
-function renderVerificationList(requirements) {
-  const container = document.getElementById("channelList");
-  if (!container) return;
-
-  if (!requirements || requirements.length === 0) {
-    container.innerHTML = `<div style="color:#10b981; font-weight:700; padding:12px;">✅ All VIP Verification Quests Completed!</div>`;
-    return;
-  }
-
-  let html = "";
-  requirements.forEach((req, idx) => {
-    let badgeClass = "badge-warning";
-    let badgeText = "○ Action Required";
-    
-    const status = req.telegram_status || req.status;
-
-    if (status === "MEMBER" || status === "ADMINISTRATOR" || status === "OWNER") {
-      badgeClass = "badge-success";
-      badgeText = "✓ Member (Completed)";
-    } else if (status === "REQUEST_PENDING") {
-      badgeClass = "badge-info";
-      badgeText = "⏳ Request Pending (Accepted by Policy)";
-    } else if (status === "LEFT") {
-      badgeClass = "badge-warning";
-      badgeText = "↻ Membership No Longer Active";
-    } else if (status === "CHECK_ERROR") {
-      badgeClass = "badge-warning";
-      badgeText = "⚠️ Unable to Verify Right Now";
-    }
-
-    html += `
-      <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:10px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-        <div>
-          <div style="font-weight:700; font-size:13px;">${idx+1}. ${req.title}</div>
-          <span class="badge ${badgeClass}" style="margin-top:4px; display:inline-block;">${badgeText}</span>
-        </div>
-        <button onclick="openChannelLink('${req.invite_link || '#'}')" class="btn-secondary" style="cursor:pointer;">Open</button>
-      </div>
-    `;
+    });
   });
-  container.innerHTML = html;
+
+  // 7. Navigate to initial screen (process start param)
+  Router.processStartParam();
+
+  // 8. Load initial home data
+  HomeScreen.load();
 }
 
-function renderActivityList(activities) {
-  const container = document.getElementById("homeActivityList");
-  if (!container) return;
-
-  if (activities.length === 0) {
-    container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No recent activity logged.</div>`;
-    return;
-  }
-
-  let html = "";
-  activities.forEach(item => {
-    html += `
-      <div class="activity-item">
-        <span class="activity-icon">${item.icon || '⚡'}</span>
-        <div class="activity-details">
-          <span class="activity-title">${item.title}</span>
-          <span class="activity-time">${item.time}</span>
-        </div>
-        <span class="badge badge-success">${item.status}</span>
-      </div>
-    `;
-  });
-  container.innerHTML = html;
-}
-
-function openChannelLink(url) {
-  triggerHaptic("success");
-  if (tg && tg.openTelegramLink && url.includes("t.me/")) {
-    tg.openTelegramLink(url);
-  } else if (tg && tg.openLink) {
-    tg.openLink(url);
+// Wire login button for external access fallback
+window.loginWithTelegram = function() {
+  if (TelegramSDK.isAvailable) {
+    bootstrap();
   } else {
-    window.open(url, "_blank");
+    window.location.href = 'https://t.me/OkFansBot/app';
   }
-}
+};
 
-async function redeemBundle() {
-  const btn = document.getElementById("btnClaimBundle");
-  if (btn) btn.disabled = true;
-  
-  try {
-    const res = await apiFetch("/api/rewards/redeem", { method: "POST" });
-    triggerHaptic("success");
-    showToast(res.message, "success", "🎉");
-    loadDashboardData();
-  } catch (err) {
-    triggerHaptic("error");
-    showToast(err.message || "Could not redeem bundle.", "error", "⚠️");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
+// Make Router navigable from screens
+window.Router = Router;
+window.showToast = showToast;
+window.TelegramSDK = TelegramSDK;
+window.ApiClient = ApiClient;
+window.Cache = Cache;
+window.AppState = AppState;
 
-async function checkVerification() {
-  const btn = document.getElementById("btnCheckVerif");
-  if (btn) btn.disabled = true;
-  
-  try {
-    const res = await apiFetch("/api/verification/check", { method: "POST" });
-    if (res.all_passed) {
-      triggerHaptic("success");
-      showToast(res.message, "success", "🎉");
-    } else {
-      triggerHaptic("error");
-      showToast(res.message, "error", "🔍");
-    }
-    renderVerificationList(res.requirements || []);
-    loadDashboardData();
-  } catch (err) {
-    triggerHaptic("error");
-    showToast(err.message || "Verification check failed.", "error", "⚠️");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function claimDailyReward() {
-  try {
-    const res = await apiFetch("/api/rewards/claim-daily", { method: "POST" });
-    triggerHaptic("success");
-    showToast(`Daily VIP Bonus Claimed! +1 Credit added. Streak: ${res.streak} days 🔥`, "success", "🎁");
-    loadDashboardData();
-  } catch (err) {
-    triggerHaptic("error");
-    showToast(err.message || "Could not claim daily bonus.", "error", "⏳");
-  }
-}
-
-function copyRefLink() {
-  const input = document.getElementById("refLinkInput");
-  input.select();
-  document.execCommand("copy");
-  triggerHaptic("success");
-  showToast("Referral link copied to clipboard!", "success", "📋");
-}
-
-function switchTab(viewId, btnEl = null, pushHistory = true) {
-  document.querySelectorAll(".tab-view").forEach(v => v.classList.remove("active"));
-  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
-  
-  const target = document.getElementById(viewId);
-  if (target) target.classList.add("active");
-  if (btnEl) btnEl.classList.add("active");
-
-  if (pushHistory && currentViewHistory[currentViewHistory.length - 1] !== viewId) {
-    currentViewHistory.push(viewId);
-  }
-
-  if (tg && tg.BackButton) {
-    if (viewId !== "view-home") {
-      tg.BackButton.show();
-    } else {
-      tg.BackButton.hide();
-    }
-  }
-}
-
-function handleNativeBack() {
-  if (currentViewHistory.length > 1) {
-    currentViewHistory.pop();
-    const prevView = currentViewHistory[currentViewHistory.length - 1];
-    switchTab(prevView, null, false);
-  } else {
-    switchTab("view-home", null, false);
-  }
-
-  if (currentViewHistory.length <= 1 && tg && tg.BackButton) {
-    tg.BackButton.hide();
-  }
-}
-
-function openSubScreen(viewId) {
-  triggerHaptic("success");
-  switchTab(viewId);
-
-  if (viewId === "view-history-verif") loadVerificationHistory();
-  if (viewId === "view-history-rewards") loadRewardHistory();
-  if (viewId === "view-history-referrals") loadReferralHistory();
-}
-
-async function loadVerificationHistory() {
-  const container = document.getElementById("verifHistoryList");
-  if (!container) return;
-  try {
-    const res = await apiFetch("/api/user/history/verification");
-    if (!res.history || res.history.length === 0) {
-      container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No verification history recorded.</div>`;
-      return;
-    }
-    let html = "";
-    res.history.forEach(item => {
-      html += `
-        <div class="activity-item">
-          <span class="activity-icon">🔒</span>
-          <div class="activity-details">
-            <span class="activity-title">${item.channel_title || 'Community Check'}</span>
-            <span class="activity-time">${item.checked_at || 'Recent'}</span>
-          </div>
-          <span class="badge ${item.application_result === 'PASS' ? 'badge-success' : 'badge-warning'}">${item.application_result}</span>
-        </div>
-      `;
-    });
-    container.innerHTML = html;
-  } catch (err) {
-    container.innerHTML = `<div style="font-size:12px; color:#ef4444; padding:8px;">Failed to load history.</div>`;
-  }
-}
-
-async function loadRewardHistory() {
-  const container = document.getElementById("rewardHistoryList");
-  if (!container) return;
-  try {
-    const res = await apiFetch("/api/user/history/rewards");
-    if (!res.history || res.history.length === 0) {
-      container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No reward transactions recorded.</div>`;
-      return;
-    }
-    let html = "";
-    res.history.forEach(item => {
-      const isPos = item.amount > 0;
-      html += `
-        <div class="activity-item">
-          <span class="activity-icon">${isPos ? '🪙' : '🎁'}</span>
-          <div class="activity-details">
-            <span class="activity-title">${item.reason}</span>
-            <span class="activity-time">${item.created_at || 'Recent'}</span>
-          </div>
-          <span class="badge ${isPos ? 'badge-success' : 'badge-info'}">${isPos ? '+' : ''}${item.amount} Credits</span>
-        </div>
-      `;
-    });
-    container.innerHTML = html;
-  } catch (err) {
-    container.innerHTML = `<div style="font-size:12px; color:#ef4444; padding:8px;">Failed to load ledger history.</div>`;
-  }
-}
-
-async function loadReferralHistory() {
-  const container = document.getElementById("referralHistoryList");
-  if (!container) return;
-  try {
-    const res = await apiFetch("/api/user/history/referrals");
-    if (!res.history || res.history.length === 0) {
-      container.innerHTML = `<div style="font-size:12px; color:#94a3b8; padding:8px;">No referrals invited yet. Share your link!</div>`;
-      return;
-    }
-    let html = "";
-    res.history.forEach(item => {
-      html += `
-        <div class="activity-item">
-          <span class="activity-icon">👤</span>
-          <div class="activity-details">
-            <span class="activity-title">${item.first_name || 'Invited User'} (@${item.username || 'user'})</span>
-            <span class="activity-time">${item.created_at || 'Recent'}</span>
-          </div>
-          <span class="badge ${item.status === 'verified' ? 'badge-success' : 'badge-warning'}">${item.status}</span>
-        </div>
-      `;
-    });
-    container.innerHTML = html;
-  } catch (err) {
-    container.innerHTML = `<div style="font-size:12px; color:#ef4444; padding:8px;">Failed to load referral breakdown.</div>`;
-  }
-}
+document.addEventListener('DOMContentLoaded', bootstrap);

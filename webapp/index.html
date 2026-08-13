@@ -2,319 +2,300 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>OkFans VIP Club - Mini App</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#080f1e">
+  <title>OkFans VIP Club</title>
+  <meta name="description" content="OkFans VIP Club — Exclusive content rewards for VIP members.">
+  
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="./style.css">
+  
+  <!-- Telegram SDK must be loaded first -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-  <div id="app" class="app-container">
-    <!-- Unauthenticated Telegram Login Landing Overlay -->
-    <div id="auth-overlay" class="auth-overlay" style="display: none;">
-      <div class="auth-card">
-        <div class="auth-icon">✈️</div>
-        <h2>OkFans VIP Club</h2>
-        <p>Sign in securely with Telegram to access your VIP rewards, credit balance, and Quest verification center.</p>
-        <button onclick="loginWithTelegram()" class="btn-primary" style="margin-top: 18px; padding: 14px; font-size: 15px;">
-          🔑 Continue with Telegram
-        </button>
-      </div>
-    </div>
-
-    <!-- Top Header Bar -->
+  <div class="app-shell">
+    <!-- Header -->
     <header class="app-header">
-      <div class="user-badge">
-        <div class="avatar-circle" id="userAvatar">VIP</div>
-        <div class="user-meta">
-          <div class="user-name" id="userName"><div class="skeleton skeleton-text" style="width: 80px;"></div></div>
-          <div class="vip-rank" id="vipRank"><div class="skeleton skeleton-text" style="width: 100px;"></div></div>
+      <div class="header-user">
+        <div class="avatar" id="userAvatar">VIP</div>
+        <div class="header-info">
+          <span class="user-name" id="userName">Loading...</span>
+          <span class="badge badge-warning" id="vipRank">🌟 Novice VIP</span>
         </div>
       </div>
-      <div class="credit-counter">
-        <span class="coin-icon">🪙</span>
-        <span class="credit-amount" id="userCredits"><div class="skeleton skeleton-text" style="width: 24px;"></div></span>
+      <div class="header-credits">
+        <span class="credits-icon">🪙</span>
+        <span class="credits-value" id="userCredits">0</span>
       </div>
     </header>
 
-    <!-- Main Content Area -->
-    <main class="content-area">
+    <!-- Main scrollable content area -->
+    <main class="app-main">
       
-      <!-- Home Tab View -->
-      <section id="view-home" class="tab-view active">
-        <!-- User Progress Card -->
-        <div class="progress-card">
-          <div class="progress-header">
-            <span class="progress-title" id="homeRankTitle">⭐ Novice VIP</span>
-            <span class="progress-subtitle" id="homeRankTarget">Target: 🔥 Silver VIP</span>
-          </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" id="homeProgressBar" style="width: 0%;"></div>
-          </div>
-          <div class="progress-footer" id="homeProgressFooter">
-            <span>0 / 1 verified referrals</span>
-            <span id="homeInvitesNeeded">1 more needed</span>
-          </div>
-        </div>
-
-        <!-- Quick Action Cards Grid -->
-        <div class="action-grid">
-          <button id="btnClaimBundle" class="action-card primary-card" onclick="redeemBundle()">
-            <span class="action-icon">🎁</span>
-            <div class="action-meta">
-              <span class="action-title">Claim Video Bundle</span>
-              <span class="action-sub">Redeem unseen videos</span>
-            </div>
-          </button>
-
-          <button class="action-card" onclick="claimDailyReward()">
-            <span class="action-icon">🎁</span>
-            <div class="action-meta">
-              <span class="action-title">Daily Bonus</span>
-              <span class="action-sub">+1 Credit Free</span>
-            </div>
-          </button>
-
-          <button class="action-card" onclick="switchTab('view-referrals')">
-            <span class="action-icon">⚡</span>
-            <div class="action-meta">
-              <span class="action-title">24h Invite Bonus</span>
-              <span class="action-sub">+5 Credits / Invite</span>
-            </div>
-          </button>
-
-          <button class="action-card" onclick="switchTab('view-verification')">
-            <span class="action-icon">🔐</span>
-            <div class="action-meta">
-              <span class="action-title">Quest Center</span>
-              <span class="action-sub">Verify membership</span>
-            </div>
-          </button>
-        </div>
-
-        <!-- Recent Activity Section -->
-        <div class="section-card">
-          <div class="section-header">
-            <h4>Recent Activity</h4>
-          </div>
-          <div id="homeActivityList" class="activity-list">
-            <div class="activity-item">
-              <span class="activity-icon">⚡</span>
-              <div class="activity-details">
-                <span class="activity-title">VIP Account Ready</span>
-                <span class="activity-time">Active</span>
-              </div>
-              <span class="badge badge-success">Verified</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Quest Tab View (Verification Center) -->
-      <section id="view-verification" class="tab-view">
-        <div class="section-card">
-          <div class="section-header">
-            <h3>🔐 Verification Center</h3>
-            <span class="badge badge-info" id="questProgressBadge">0 / 0 Completed</span>
-          </div>
-          <p class="section-desc">Complete your required channel steps below to activate full VIP reward access.</p>
-          <div id="channelList" class="channel-list">
-            <div class="skeleton-card"></div>
-            <div class="skeleton-card"></div>
-          </div>
-          <button id="btnCheckVerif" class="btn-primary" style="margin-top: 14px;" onclick="checkVerification()">🔄 Re-Check Verification</button>
-        </div>
-      </section>
-
-      <!-- VIP Tiers Tab View -->
-      <section id="view-tiers" class="tab-view">
-        <div class="section-card current-tier-banner">
-          <span class="badge badge-warning">YOUR CURRENT LEVEL</span>
-          <h3 id="currentVipTitle">Novice VIP</h3>
-          <div class="progress-bar-container" style="margin: 10px 0;">
-            <div class="progress-bar-fill" id="vipProgressBar" style="width: 0%;"></div>
-          </div>
-          <p id="vipProgressSub" class="section-desc" style="margin: 0; color: white;">Next Target: Silver VIP (1 invite needed)</p>
-        </div>
-
-        <div class="section-card">
-          <h3>🏆 VIP Tier Roadmap</h3>
-          <p class="section-desc">1 Credit ALWAYS costs 1 Credit. Higher ranks deliver bigger video bundles!</p>
-          <div class="tier-list">
-            <div class="tier-card tier-novice">
-              <div class="tier-header">🌟 Novice VIP (Level 1)</div>
-              <div class="tier-yield">1 Credit = <b>5 Videos</b></div>
-              <div class="tier-req">Requirement: 0 Invites</div>
-            </div>
-            <div class="tier-card tier-silver">
-              <div class="tier-header">🔥 Silver VIP (Level 2)</div>
-              <div class="tier-yield">1 Credit = <b>7 Videos</b></div>
-              <div class="tier-req">Requirement: 1 Verified Invite</div>
-            </div>
-            <div class="tier-card tier-gold">
-              <div class="tier-header">👑 Gold VIP (Level 3)</div>
-              <div class="tier-yield">1 Credit = <b>10 Videos</b></div>
-              <div class="tier-req">Requirement: 4 Verified Invites</div>
-            </div>
-            <div class="tier-card tier-diamond">
-              <div class="tier-header">💎 Diamond VIP (Level 4)</div>
-              <div class="tier-yield">1 Credit = <b>15 Videos</b></div>
-              <div class="tier-req">Requirement: 7 Verified Invites</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Referrals Tab View -->
-      <section id="view-referrals" class="tab-view">
-        <div class="section-card">
-          <h3>🤝 Invite Center</h3>
-          <p class="section-desc">Earn <b>5 Credits per invite</b> when your friends join & verify within 24 hours!</p>
+      <!-- HOME VIEW -->
+      <section class="tab-view active" id="view-home">
+        <div class="card">
+          <h2 class="section-title">Welcome Back</h2>
+          <p class="text-secondary">Track your progress and claim daily rewards.</p>
           
-          <div class="link-box">
-            <input type="text" id="refLinkInput" readonly value="Loading referral link...">
-            <button class="btn-secondary" onclick="copyRefLink()">Copy Link</button>
+          <div class="progress-section">
+            <div class="d-flex justify-between align-center">
+              <span id="homeRankTitle" class="font-weight-semibold">Level 1</span>
+              <span id="homeRankTarget" class="badge badge-pending">Next: Level 2</span>
+            </div>
+            
+            <div class="progress-container">
+              <div class="progress-track">
+                <div class="progress-fill" id="homeProgressBar" style="width: 25%;"></div>
+              </div>
+              <div class="progress-labels" id="homeProgressFooter">
+                <span>25 / 100 XP</span>
+              </div>
+            </div>
           </div>
+          
+          <button class="btn-primary mt-4" id="btnClaimBundle">
+            🎁 Claim Daily Bundle
+          </button>
+        </div>
 
-          <div class="stats-grid" style="margin-top: 14px;">
-            <div class="stat-card">
-              <span class="stat-label">Total Invites</span>
-              <span class="stat-value" id="refStatInvited">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Qualified Referrals</span>
-              <span class="stat-value" id="refStatQualified">0</span>
-            </div>
+        <h3 class="section-title mt-4">Recent Activity</h3>
+        <div id="homeActivityList">
+          <div class="skeleton-card">
+            <div class="skeleton-line" style="width: 60%;"></div>
+            <div class="skeleton-line" style="width: 40%;"></div>
           </div>
         </div>
       </section>
 
-      <!-- Profile Tab View -->
-      <section id="view-profile" class="tab-view">
-        <div class="profile-card">
-          <div class="profile-header-info">
-            <div class="avatar-circle-large" id="profAvatar">VIP</div>
-            <div>
-              <h3 id="profName">VIP User</h3>
-              <span class="vip-rank" id="profRankBadge">🌟 Novice VIP</span>
+      <!-- VERIFICATION VIEW -->
+      <section class="tab-view" id="view-verification">
+        <div class="card">
+          <div class="d-flex justify-between align-center mb-4">
+            <h2 class="section-title mb-0">Quests</h2>
+            <span class="badge badge-pending" id="questProgressBadge">0/3 Done</span>
+          </div>
+          
+          <p>Join the channels below to verify your account and unlock VIP features.</p>
+          
+          <div id="channelList" class="mt-4 mb-4">
+            <div class="skeleton-card">
+              <div class="skeleton-line" style="width: 80%;"></div>
+              <div class="skeleton-line" style="width: 50%;"></div>
             </div>
           </div>
-          <div class="profile-meta-list">
-            <div class="meta-item"><span>Telegram ID:</span> <strong id="profId">Loading...</strong></div>
-            <div class="meta-item"><span>Available Credits:</span> <strong id="profCredits">0 🪙</strong></div>
-            <div class="meta-item"><span>Check-In Streak:</span> <strong id="profStreak">0 Days 🔥</strong></div>
-            <div class="meta-item"><span>Total Referrals:</span> <strong id="profInvites">0 👥</strong></div>
-          </div>
+          
+          <button class="btn-primary" id="btnCheckVerif">
+            ✅ Check Verification
+          </button>
         </div>
+      </section>
 
-        <div class="section-card" style="margin-top: 14px;">
-          <h4>Account Details & Settings</h4>
-          <div class="menu-list">
-            <div class="menu-item" onclick="openSubScreen('view-history-verif')">
-              <span>🔒 Verification History</span>
-              <span class="menu-arrow">›</span>
+      <!-- VIP VIEW -->
+      <section class="tab-view" id="view-vip">
+        <div class="card">
+          <h2 class="section-title text-center">VIP Roadmap</h2>
+          <p class="text-center text-secondary mb-4">Level up to unlock exclusive perks.</p>
+          
+          <div class="list-item">
+            <div class="list-item-content">
+              <div class="avatar" style="border-color: var(--text-muted)">N</div>
+              <div>
+                <div class="list-item-title">Novice</div>
+                <div class="list-item-subtitle">Basic access</div>
+              </div>
             </div>
-            <div class="menu-item" onclick="openSubScreen('view-history-rewards')">
-              <span>🎁 Reward Ledger History</span>
-              <span class="menu-arrow">›</span>
+            <span class="badge badge-success">Current</span>
+          </div>
+          
+          <div class="list-item">
+            <div class="list-item-content">
+              <div class="avatar" style="border-color: var(--accent-primary)">E</div>
+              <div>
+                <div class="list-item-title">Elite</div>
+                <div class="list-item-subtitle">Bonus daily rewards</div>
+              </div>
             </div>
-            <div class="menu-item" onclick="openSubScreen('view-history-referrals')">
-              <span>🤝 Referral Breakdown</span>
-              <span class="menu-arrow">›</span>
+            <span class="list-item-action text-muted">100 XP</span>
+          </div>
+          
+          <div class="list-item">
+            <div class="list-item-content">
+              <div class="avatar" style="border-color: var(--accent-gold)">L</div>
+              <div>
+                <div class="list-item-title">Legend</div>
+                <div class="list-item-subtitle">All features unlocked</div>
+              </div>
             </div>
-            <div class="menu-item" onclick="openSubScreen('view-rules')">
-              <span>📜 Rules & Terms</span>
-              <span class="menu-arrow">›</span>
-            </div>
+            <span class="list-item-action text-muted">500 XP</span>
           </div>
         </div>
       </section>
 
-      <!-- Secondary Screen: Verification History -->
-      <section id="view-history-verif" class="tab-view">
-        <div class="section-card">
-          <div class="section-header">
-            <h3>🔒 Verification History</h3>
+      <!-- INVITE VIEW -->
+      <section class="tab-view" id="view-invite">
+        <div class="card text-center">
+          <h2 class="section-title">Invite Friends</h2>
+          <p>Earn credits for every friend who joins and verifies their account.</p>
+          
+          <div class="d-flex justify-between mt-4 mb-4 gap-3">
+            <div class="flex-1">
+              <div class="font-size-2xl font-weight-bold color-primary" id="refStatInvited">0</div>
+              <div class="text-secondary font-size-xs">Total Invited</div>
+            </div>
+            <div class="flex-1">
+              <div class="font-size-2xl font-weight-bold color-success" id="refStatQualified">0</div>
+              <div class="text-secondary font-size-xs">Qualified</div>
+            </div>
           </div>
-          <p class="section-desc">Audit log of your historical community verification checks.</p>
-          <div id="verifHistoryList" class="activity-list" style="margin-top: 10px;">
-            <div class="skeleton-card"></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Secondary Screen: Reward & Credit History -->
-      <section id="view-history-rewards" class="tab-view">
-        <div class="section-card">
-          <div class="section-header">
-            <h3>🎁 Reward & Credit Ledger</h3>
-          </div>
-          <p class="section-desc">Complete record of credits earned, daily bonuses, and bundle redemptions.</p>
-          <div id="rewardHistoryList" class="activity-list" style="margin-top: 10px;">
-            <div class="skeleton-card"></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Secondary Screen: Referral Breakdown -->
-      <section id="view-history-referrals" class="tab-view">
-        <div class="section-card">
-          <div class="section-header">
-            <h3>🤝 Referral Breakdown</h3>
-          </div>
-          <p class="section-desc">Detailed list of invited users and verification statuses.</p>
-          <div id="referralHistoryList" class="activity-list" style="margin-top: 10px;">
-            <div class="skeleton-card"></div>
+          
+          <div class="mt-4">
+            <div class="text-left mb-2 text-secondary font-size-sm">Your Referral Link</div>
+            <input type="text" class="input-field mb-3" id="refLinkInput" readonly value="https://t.me/OkFansBot?start=ref_123">
+            <button class="btn-secondary" onclick="document.getElementById('refLinkInput').select(); document.execCommand('copy');">
+              📋 Copy Link
+            </button>
           </div>
         </div>
       </section>
 
-      <!-- Secondary Screen: Rules & Terms -->
-      <section id="view-rules" class="tab-view">
-        <div class="section-card">
-          <h3>📜 Rules & Program Terms</h3>
-          <div style="font-size: 13px; color: var(--text-sub); line-height: 1.6; margin-top: 10px;">
-            <p>• <b>1 Credit = 1 Bundle Redemption:</b> Every credit allows you to unlock unseen exclusive video bundles tailored to your VIP tier level.</p>
-            <p style="margin-top: 8px;">• <b>Verification Integrity:</b> You must remain a member or maintain an active join request for required channels. Leaving channels revokes verified status.</p>
-            <p style="margin-top: 8px;">• <b>Flash Referral Bonus:</b> Earn 5 bonus credits for every referred friend who joins & verifies within 24 hours.</p>
-            <p style="margin-top: 8px;">• <b>Daily VIP Check-in:</b> Claim +1 free credit every 24 hours to build your streak.</p>
+      <!-- PROFILE VIEW -->
+      <section class="tab-view" id="view-profile">
+        <div class="card text-center">
+          <div class="avatar mx-auto mb-3" id="profAvatar" style="width: 80px; height: 80px; font-size: 32px; margin: 0 auto;">V</div>
+          <h2 class="section-title mb-1" id="profName">User Name</h2>
+          <span class="badge badge-warning mb-2" id="profRankBadge">Novice VIP</span>
+          <p class="text-secondary font-size-sm">ID: <span id="profId">000000000</span></p>
+          
+          <div class="d-flex gap-2 mt-4">
+            <div class="flex-1 p-2 bg-elevated border-radius-md">
+              <div class="font-size-lg font-weight-bold" id="profCredits">0</div>
+              <div class="font-size-xs text-secondary">Credits</div>
+            </div>
+            <div class="flex-1 p-2 bg-elevated border-radius-md">
+              <div class="font-size-lg font-weight-bold" id="profStreak">0</div>
+              <div class="font-size-xs text-secondary">Streak</div>
+            </div>
+            <div class="flex-1 p-2 bg-elevated border-radius-md">
+              <div class="font-size-lg font-weight-bold" id="profInvites">0</div>
+              <div class="font-size-xs text-secondary">Invites</div>
+            </div>
           </div>
         </div>
+        
+        <h3 class="section-title mt-4">Settings & History</h3>
+        <button class="list-item w-100 border-none bg-elevated" onclick="Router.navigate('history-rewards')">
+          <div class="list-item-content">
+            <span class="font-size-lg">🎁</span>
+            <span class="list-item-title">Rewards History</span>
+          </div>
+          <span class="text-secondary">›</span>
+        </button>
+        <button class="list-item w-100 border-none bg-elevated" onclick="Router.navigate('history-verification')">
+          <div class="list-item-content">
+            <span class="font-size-lg">✅</span>
+            <span class="list-item-title">Verification History</span>
+          </div>
+          <span class="text-secondary">›</span>
+        </button>
+        <button class="list-item w-100 border-none bg-elevated" onclick="Router.navigate('history-referrals')">
+          <div class="list-item-content">
+            <span class="font-size-lg">👥</span>
+            <span class="list-item-title">Referral History</span>
+          </div>
+          <span class="text-secondary">›</span>
+        </button>
+        <button class="list-item w-100 border-none bg-elevated" onclick="Router.navigate('notifications')">
+          <div class="list-item-content">
+            <span class="font-size-lg">🔔</span>
+            <span class="list-item-title">Notifications</span>
+          </div>
+          <span class="text-secondary">›</span>
+        </button>
+        <button class="list-item w-100 border-none bg-elevated" onclick="Router.navigate('settings')">
+          <div class="list-item-content">
+            <span class="font-size-lg">⚙️</span>
+            <span class="list-item-title">Settings</span>
+          </div>
+          <span class="text-secondary">›</span>
+        </button>
       </section>
 
+      <!-- SUB-SCREENS (History / Settings) -->
+      <section class="tab-view" id="view-history-rewards">
+        <h2 class="section-title">Rewards History</h2>
+        <div id="rewardHistoryList">
+          <p class="text-secondary text-center mt-4">No rewards yet.</p>
+        </div>
+      </section>
+      
+      <section class="tab-view" id="view-history-verification">
+        <h2 class="section-title">Verification Log</h2>
+        <div id="verifHistoryList">
+          <p class="text-secondary text-center mt-4">No verification logs.</p>
+        </div>
+      </section>
+      
+      <section class="tab-view" id="view-history-referrals">
+        <h2 class="section-title">Referral Breakdown</h2>
+        <div id="referralHistoryList">
+          <p class="text-secondary text-center mt-4">No referrals yet.</p>
+        </div>
+      </section>
+      
+      <section class="tab-view" id="view-notifications">
+        <h2 class="section-title">Notifications</h2>
+        <p class="text-secondary text-center mt-4">No new notifications.</p>
+      </section>
+      
+      <section class="tab-view" id="view-settings">
+        <h2 class="section-title">Settings</h2>
+        <p class="text-secondary text-center mt-4">App settings will appear here.</p>
+      </section>
     </main>
 
-    <!-- Bottom Navigation Bar -->
+    <!-- Bottom Navigation -->
     <nav class="bottom-nav">
-      <button class="nav-item active" onclick="switchTab('view-home', this)">
+      <button class="nav-item active" data-tab="home">
         <span class="nav-icon">🏠</span>
         <span class="nav-label">Home</span>
       </button>
-      <button class="nav-item" onclick="switchTab('view-verification', this)">
-        <span class="nav-icon">🔐</span>
+      <button class="nav-item" data-tab="verification">
+        <span class="nav-icon">✅</span>
         <span class="nav-label">Quest</span>
       </button>
-      <button class="nav-item" onclick="switchTab('view-tiers', this)">
-        <span class="nav-icon">🏆</span>
+      <button class="nav-item" data-tab="vip">
+        <span class="nav-icon">🌟</span>
         <span class="nav-label">VIP</span>
       </button>
-      <button class="nav-item" onclick="switchTab('view-referrals', this)">
-        <span class="nav-icon">🤝</span>
+      <button class="nav-item" data-tab="invite">
+        <span class="nav-icon">👥</span>
         <span class="nav-label">Invite</span>
       </button>
-      <button class="nav-item" onclick="switchTab('view-profile', this)">
+      <button class="nav-item" data-tab="profile">
         <span class="nav-icon">👤</span>
         <span class="nav-label">Profile</span>
       </button>
-    <!-- Sleek Toast Notification Container (Zero Alert Boxes) -->
-    <div id="toast" class="toast-notification">
-      <span id="toastIcon">ℹ️</span>
-      <span id="toastText">Notification message</span>
+    </nav>
+
+    <!-- Auth Overlay -->
+    <div id="auth-overlay">
+      <div class="spinner"></div>
+      <p>Authenticating with Telegram...</p>
     </div>
 
+    <!-- Toast -->
+    <div id="toast" class="toast">
+      <span class="toast-icon">ℹ️</span>
+      <span class="toast-message">Notification</span>
+    </div>
   </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>

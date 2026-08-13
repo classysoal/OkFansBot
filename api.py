@@ -13,7 +13,7 @@ import logging
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request, status, Response
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -377,6 +377,7 @@ def get_dashboard(current_user: dict = Depends(get_current_user)):
             "status": st
         })
         
+    notifications_unread = database.get_notifications_unread_count(user_id)
     recent_activity = [
         {"icon": "⚡", "title": "Account Registered", "time": "Active", "status": "Verified"},
         {"icon": "🎁", "title": "Daily Bonus Eligibility", "time": "24h Cooldown", "status": "Available"}
@@ -419,7 +420,8 @@ def get_dashboard(current_user: dict = Depends(get_current_user)):
             "total_required": len(required_channels),
             "channels": formatted_channels
         },
-        "recent_activity": recent_activity
+        "recent_activity": recent_activity,
+        "notifications_unread_count": notifications_unread
     }
 
 @app.get("/api/verification")
@@ -474,16 +476,17 @@ def get_user_referral_history(current_user: dict = Depends(get_current_user)):
     return {"success": True, "history": history}
 
 @app.post("/api/rewards/claim-daily")
-def claim_daily_reward(current_user: dict = Depends(get_current_user)):
+def claim_daily_reward(response: Response, current_user: dict = Depends(get_current_user)):
     res = database.claim_daily_checkin(current_user["user_id"])
     if not res.get("success"):
         if res.get("reason") == "cooldown":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Daily bonus already claimed. Cooldown: {res.get('hours_left')} hours remaining.")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not claim daily bonus.")
+    response.headers["X-Cache-Invalidate"] = "dashboard"
     return res
 
 @app.post("/api/rewards/redeem")
-async def redeem_video_bundle(current_user: dict = Depends(get_current_user)):
+async def redeem_video_bundle(response: Response, current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     vip_info = database.get_user_vip_tier_info(user_id)
     required_cost = vip_info["credit_cost"]
@@ -554,6 +557,7 @@ async def redeem_video_bundle(current_user: dict = Depends(get_current_user)):
     database.increment_claimed_count(user_id)
     
     updated_user = database.get_user(user_id)
+    response.headers["X-Cache-Invalidate"] = "dashboard"
     return {
         "success": True,
         "bundle_size": delivered_count,
@@ -562,7 +566,7 @@ async def redeem_video_bundle(current_user: dict = Depends(get_current_user)):
     }
 
 @app.post("/api/verification/check")
-async def run_verification_check(current_user: dict = Depends(get_current_user)):
+async def run_verification_check(response: Response, current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     active_channels = database.get_required_channels()
     
@@ -575,6 +579,7 @@ async def run_verification_check(current_user: dict = Depends(get_current_user))
     res = await VerificationService.evaluate_user_verification(user_id, required_channels, BOT_TOKEN)
     updated_user = database.get_user(user_id)
     
+    response.headers["X-Cache-Invalidate"] = "verification,dashboard"
     return {
         "success": True,
         "overall": res["overall"],
@@ -668,6 +673,68 @@ def admin_give_credits(data: AdminCreditAdjust, admin: dict = Depends(get_admin_
     database.log_admin_action(admin["user_id"], "api_give_credits", f"Added {data.amount} to user {data.user_id}")
     new_user = database.get_user(data.user_id)
     return {"success": True, "new_balance": new_user.get("credits", 0) if new_user else 0}
+
+@app.get("/api/notifications")
+def get_user_notifications(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user)
+):
+    """Returns paginated user notifications, newest first."""
+    from contracts.notifications import NotificationsResponse
+    user_id = current_user["user_id"]
+    offset = (page - 1) * limit
+    notifications = database.get_user_notifications(user_id, limit=limit, offset=offset)
+    unread_count = database.get_notifications_unread_count(user_id)
+    
+    # Serialize datetime fields to ISO strings for JSON
+    for n in notifications:
+        if hasattr(n.get('created_at'), 'isoformat'):
+            n['created_at'] = n['created_at'].isoformat()
+        n['read'] = bool(n.get('read', False))
+    
+    return {
+        "notifications": notifications,
+        "unread_count": unread_count,
+        "page": page,
+        "limit": limit
+    }
+
+@app.post("/api/notifications/read")
+def mark_notifications_read_endpoint(
+    payload: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Marks notifications as read. POST {"notification_ids": [1,2,3]} or {} for all."""
+    from contracts.notifications import MarkReadRequest
+    user_id = current_user["user_id"]
+    ids = payload.get("notification_ids", [])
+    ok = database.mark_notifications_read(user_id, ids if ids else None)
+    return {"success": ok}
+
+@app.get("/api/settings")
+def get_settings(current_user: dict = Depends(get_current_user)):
+    """Returns user settings."""
+    from contracts.referrals import SettingsData, SettingsResponse
+    user_id = current_user["user_id"]
+    settings = database.get_user_settings(user_id)
+    defaults = {"notifications_enabled": True, "language": "en"}
+    defaults.update(settings)
+    return {"success": True, "settings": defaults}
+
+@app.post("/api/settings")
+def update_settings(payload: dict, current_user: dict = Depends(get_current_user)):
+    """Updates user settings. Only known keys are persisted."""
+    user_id = current_user["user_id"]
+    allowed_keys = {"notifications_enabled", "language"}
+    current_settings = database.get_user_settings(user_id)
+    
+    for key in allowed_keys:
+        if key in payload:
+            current_settings[key] = payload[key]
+    
+    ok = database.save_user_settings(user_id, current_settings)
+    return {"success": ok, "settings": current_settings}
 
 if __name__ == "__main__":
     import uvicorn

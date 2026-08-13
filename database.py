@@ -113,7 +113,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_level INT DEFAULT 1;",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS total_rewards_claimed INT DEFAULT 0;",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bundle_data TEXT;",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bundle_resends INT DEFAULT 0;"
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bundle_resends INT DEFAULT 0;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS settings TEXT DEFAULT '{}';"
         ]:
             try:
                 cursor.execute(col_def)
@@ -253,6 +254,20 @@ def init_db():
             risk_state VARCHAR(50) DEFAULT 'NORMAL'
         );
         """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(user_id),
+            type TEXT NOT NULL DEFAULT 'system',
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            read BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+        CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id, read) WHERE read = FALSE;
+        """)
     else:
         # SQLite Schema
         cursor.execute("""
@@ -290,7 +305,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN vip_level INTEGER DEFAULT 1;",
             "ALTER TABLE users ADD COLUMN total_rewards_claimed INTEGER DEFAULT 0;",
             "ALTER TABLE users ADD COLUMN last_bundle_data TEXT;",
-            "ALTER TABLE users ADD COLUMN last_bundle_resends INTEGER DEFAULT 0;"
+            "ALTER TABLE users ADD COLUMN last_bundle_resends INTEGER DEFAULT 0;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS settings TEXT DEFAULT '{}';"
         ]:
             try:
                 cursor.execute(col_def)
@@ -429,6 +445,19 @@ def init_db():
             details TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(user_id),
+            type TEXT NOT NULL DEFAULT 'system',
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            read INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
         """)
 
     conn.commit()
@@ -1581,5 +1610,115 @@ def get_user_referral_history(user_id: int, limit: int = 20) -> list:
     except Exception as e:
         logging.error(f"Error in get_user_referral_history for user {user_id}: {e}")
         return []
+    finally:
+        conn.close()
+
+# --- NOTIFICATIONS ---
+
+def get_user_notifications(user_id: int, limit: int = 50, offset: int = 0) -> list:
+    """Returns paginated notifications for a user, newest first."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, user_id, type, title, body, read, created_at FROM notifications "
+            "WHERE user_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (user_id, limit, offset)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+def get_notifications_unread_count(user_id: int) -> int:
+    """Returns count of unread notifications for a user."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = %s AND read = %s",
+            (user_id, False if IS_POSTGRES else 0)
+        )
+        row = cursor.fetchone()
+        return int(dict(row).get('cnt', 0)) if row else 0
+    finally:
+        conn.close()
+
+def mark_notifications_read(user_id: int, notification_ids: list = None) -> bool:
+    """Marks notifications as read. If notification_ids is empty/None, marks all."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        read_val = True if IS_POSTGRES else 1
+        if notification_ids:
+            placeholders = ', '.join(['%s'] * len(notification_ids))
+            cursor.execute(
+                f"UPDATE notifications SET read = %s WHERE user_id = %s AND id IN ({placeholders})",
+                [read_val, user_id] + list(notification_ids)
+            )
+        else:
+            cursor.execute(
+                "UPDATE notifications SET read = %s WHERE user_id = %s",
+                (read_val, user_id)
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error marking notifications read: {e}")
+        return False
+    finally:
+        conn.close()
+
+def create_notification(user_id: int, type: str, title: str, body: str) -> bool:
+    """Creates a new notification for a user."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO notifications (user_id, type, title, body) VALUES (%s, %s, %s, %s)",
+            (user_id, type, title, body)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error creating notification: {e}")
+        return False
+    finally:
+        conn.close()
+
+# --- USER SETTINGS ---
+
+def get_user_settings(user_id: int) -> dict:
+    """Returns user settings dict. Defaults to empty dict on parse error."""
+    import json as _json
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT settings FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        raw = dict(row).get('settings', '{}') or '{}'
+        try:
+            return _json.loads(raw)
+        except Exception:
+            return {}
+    finally:
+        conn.close()
+
+def save_user_settings(user_id: int, settings: dict) -> bool:
+    """Saves user settings dict as JSON string."""
+    import json as _json
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET settings = %s WHERE user_id = %s",
+            (_json.dumps(settings), user_id)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error saving user settings: {e}")
+        return False
     finally:
         conn.close()
