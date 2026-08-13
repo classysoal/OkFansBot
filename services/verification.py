@@ -156,6 +156,14 @@ class VerificationService:
                 passed_count += 1
             elif res["application_result"] == ApplicationResult.ERROR:
                 has_error = True
+            
+            # Persist status to database
+            database.save_user_verification_status(
+                user_id, 
+                res["channel_id"], 
+                res["telegram_status"], 
+                res["application_result"]
+            )
 
         total_required = len(required_channels)
         all_passed = (passed_count == total_required and total_required > 0)
@@ -179,6 +187,51 @@ class VerificationService:
             "all_passed": all_passed,
             "requirements": results
         }
+
+    @staticmethod
+    def get_persisted_verification_summary(user_id: int, required_channels: list) -> dict:
+        """
+        Loads persisted verification state from database without making external Telegram API calls.
+        Fast (<5ms) for standard page renders and navigation.
+        """
+        persisted = database.get_persisted_user_verification(user_id)
+        results = []
+        passed_count = 0
+
+        for ch in required_channels:
+            db_id = ch["id"]
+            p_data = persisted.get(db_id, {})
+            
+            status = p_data.get("telegram_status") or ("MEMBER" if ch.get("application_result") == "PASS" else "NOT_JOINED")
+            app_result = p_data.get("application_result") or ("PASS" if status in ["MEMBER", "ADMINISTRATOR", "OWNER", "REQUEST_PENDING"] else "FAIL")
+            
+            if app_result == ApplicationResult.PASS:
+                passed_count += 1
+
+            results.append({
+                "channel_id": db_id,
+                "title": ch.get("title", f"Channel {ch.get('label', '')}"),
+                "invite_link": ch.get("invite_link", ""),
+                "telegram_status": status,
+                "application_result": app_result,
+                "reason": "Persisted state from last check"
+            })
+
+        total_required = len(required_channels)
+        all_passed = (passed_count == total_required and total_required > 0)
+        user = database.get_user(user_id)
+        is_completed = bool(user.get("starter_completed", 0)) or all_passed
+
+        return {
+            "success": True,
+            "overall": "PASS" if is_completed else "INCOMPLETE",
+            "passed_count": passed_count if not is_completed else total_required,
+            "total_required": total_required,
+            "all_passed": is_completed,
+            "is_completed": is_completed,
+            "requirements": results
+        }
+
 
     @staticmethod
     async def _check_channel_with_client(client: httpx.AsyncClient, user_id: int, channel: dict, bot_token: str = None) -> dict:

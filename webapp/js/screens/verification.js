@@ -54,11 +54,13 @@ function getStatusBadge(status, result) {
 function render(data) {
   const channels = data.required_channels || data.requirements || data.channels || [];
   const totalRequired = data.total_required || channels.length;
-  const isCompleted = data.is_completed || data.all_passed;
-  
-  const passedCount = data.passed_count !== undefined 
-    ? data.passed_count 
-    : channels.filter(c => ['MEMBER', 'ADMINISTRATOR', 'OWNER', 'REQUEST_PENDING', 'COMPLETED'].includes(c.telegram_status || c.status) || c.application_result === 'PASS').length;
+
+  const passedCount = channels.filter(c => 
+    ['MEMBER', 'ADMINISTRATOR', 'OWNER', 'REQUEST_PENDING', 'COMPLETED'].includes(c.telegram_status || c.status) || 
+    c.application_result === 'PASS'
+  ).length;
+
+  const isCompleted = Boolean(data.all_passed) || (passedCount === totalRequired && totalRequired > 0);
 
   if (channels.length === 0) {
     renderEmpty(_container, 'No verification channels required.');
@@ -68,9 +70,9 @@ function render(data) {
   const html = `
     ${isCompleted ? `
       <div class="card mb-3 p-4 text-center" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1.5px solid rgba(16, 185, 129, 0.4);">
-        <div class="badge badge-success mb-2 font-size-xs">✓ Verification Complete</div>
+        <div class="badge badge-success mb-2 font-size-xs">✓ ALL REQUIREMENTS COMPLETE</div>
         <h2 class="font-size-lg font-weight-bold text-primary mb-1">Starter Quests Completed!</h2>
-        <p class="text-secondary font-size-sm mb-3">Your account is fully verified. You can now claim your VIP video rewards.</p>
+        <p class="text-secondary font-size-sm mb-3">Your account is 100% verified. You can now claim your VIP video rewards.</p>
         <button id="btn-post-verify-get-video" class="btn btn-gold w-100 font-size-md" style="min-height: 48px;">
           🎬 GET VIDEO NOW ↗
         </button>
@@ -81,12 +83,13 @@ function render(data) {
       <div class="d-flex justify-between align-center mb-2">
         <h2 class="section-title mb-0">Channel Quests</h2>
         <span class="badge ${isCompleted ? 'badge-success' : 'badge-pending'}">
-          ${isCompleted ? 'All Verified' : `${passedCount}/${totalRequired} Completed`}
+          ${isCompleted ? 'ALL REQUIREMENTS COMPLETE' : `${passedCount}/${totalRequired} Completed`}
         </span>
       </div>
       <p class="text-secondary font-size-sm mb-3">
         Join the partner channels below to complete verification and unlock your VIP rewards.
       </p>
+
       
       <div class="channel-list d-flex flex-column gap-2 mb-3">
         ${channels.map((ch, idx) => {

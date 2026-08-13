@@ -266,6 +266,52 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_verification_status (
+            user_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            telegram_status VARCHAR(50) NOT NULL DEFAULT 'NOT_JOINED',
+            application_result VARCHAR(50) NOT NULL DEFAULT 'FAIL',
+            last_checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, channel_id)
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS onboarding_bundles (
+            bundle_id SERIAL PRIMARY KEY,
+            bundle_code VARCHAR(100) UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            required_count INT NOT NULL DEFAULT 5,
+            reward_credits INT NOT NULL DEFAULT 1,
+            is_active INT NOT NULL DEFAULT 1
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_bundle_claims (
+            claim_id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(user_id),
+            bundle_id INT NOT NULL,
+            status VARCHAR(50) NOT NULL DEFAULT 'CLAIMED',
+            claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, bundle_id)
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_claims (
+            claim_id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(user_id),
+            claim_date VARCHAR(50) NOT NULL,
+            reward_amount INT NOT NULL DEFAULT 1,
+            streak_after_claim INT NOT NULL DEFAULT 1,
+            claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, claim_date)
+        );
+        """)
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id, read) WHERE read = FALSE;")
 
@@ -459,6 +505,52 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_verification_status (
+            user_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            telegram_status TEXT NOT NULL DEFAULT 'NOT_JOINED',
+            application_result TEXT NOT NULL DEFAULT 'FAIL',
+            last_checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, channel_id)
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS onboarding_bundles (
+            bundle_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bundle_code TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            required_count INTEGER NOT NULL DEFAULT 5,
+            reward_credits INTEGER NOT NULL DEFAULT 1,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_bundle_claims (
+            claim_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(user_id),
+            bundle_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'CLAIMED',
+            claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, bundle_id)
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_claims (
+            claim_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(user_id),
+            claim_date TEXT NOT NULL,
+            reward_amount INTEGER NOT NULL DEFAULT 1,
+            streak_after_claim INTEGER NOT NULL DEFAULT 1,
+            claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, claim_date)
+        );
+        """)
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);")
 
 
@@ -1791,3 +1883,127 @@ def save_user_settings(user_id: int, settings: dict) -> bool:
         return False
     finally:
         conn.close()
+
+
+# --- PERSISTED VERIFICATION & BUNDLE ENTITLEMENTS ---
+
+def get_persisted_user_verification(user_id: int) -> dict:
+    """
+    Returns map of channel_id -> { telegram_status, application_result, last_checked_at }
+    from user_verification_status table.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_id, telegram_status, application_result, last_checked_at FROM user_verification_status WHERE user_id = %s", (user_id,))
+        rows = cursor.fetchall()
+        result = {}
+        for r in rows:
+            d = dict(r)
+            ch_id = d['channel_id']
+            if hasattr(d.get('last_checked_at'), 'isoformat'):
+                d['last_checked_at'] = d['last_checked_at'].isoformat()
+            result[ch_id] = d
+        return result
+    finally:
+        conn.close()
+
+def save_user_verification_status(user_id: int, channel_id: int, telegram_status: str, application_result: str) -> bool:
+    """
+    Upserts user_verification_status for a user and channel.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            if is_postgres_conn(conn):
+                cursor.execute("""
+                    INSERT INTO user_verification_status (user_id, channel_id, telegram_status, application_result, last_checked_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, channel_id) DO UPDATE SET
+                        telegram_status = EXCLUDED.telegram_status,
+                        application_result = EXCLUDED.application_result,
+                        last_checked_at = EXCLUDED.last_checked_at
+                """, (user_id, channel_id, telegram_status, application_result, now_str))
+            else:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO user_verification_status (user_id, channel_id, telegram_status, application_result, last_checked_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (user_id, channel_id, telegram_status, application_result, now_str))
+            return True
+    except Exception as e:
+        logging.error(f"Error saving user verification status: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_user_claimed_bundles(user_id: int) -> list:
+    """
+    Returns list of bundle_ids claimed by user_id.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT bundle_id FROM user_bundle_claims WHERE user_id = %s", (user_id,))
+        rows = cursor.fetchall()
+        return [r['bundle_id'] if isinstance(r, dict) else r[0] for r in rows]
+    finally:
+        conn.close()
+
+def claim_onboarding_bundle(user_id: int, bundle_id: int = 1) -> dict:
+    """
+    Atomically claims an onboarding bundle for user_id.
+    Enforces lifetime UNIQUE(user_id, bundle_id) constraint in database.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT bundle_id, name, reward_credits, required_count FROM onboarding_bundles WHERE bundle_id = %s AND is_active = 1", (bundle_id,))
+            bundle_row = cursor.fetchone()
+            if not bundle_row:
+                reward_credits = 1
+                bundle_name = "Starter Onboarding Reward"
+            else:
+                b_dict = dict(bundle_row)
+                reward_credits = b_dict.get('reward_credits', 1)
+                bundle_name = b_dict.get('name', 'Starter Onboarding Reward')
+
+            try:
+                cursor.execute("""
+                    INSERT INTO user_bundle_claims (user_id, bundle_id, status)
+                    VALUES (%s, %s, 'CLAIMED')
+                """, (user_id, bundle_id))
+            except Exception:
+                return {"success": False, "reason": "already_claimed", "message": "Onboarding reward bundle already claimed."}
+
+            cursor.execute("SELECT credits FROM users WHERE user_id = %s", (user_id,))
+            user_row = cursor.fetchone()
+            cur_credits = (dict(user_row).get('credits', 0) if user_row else 0)
+            new_credits = cur_credits + reward_credits
+
+            cursor.execute("UPDATE users SET credits = %s, starter_completed = 1 WHERE user_id = %s", (new_credits, user_id))
+            
+            try:
+                cursor.execute("""
+                    INSERT INTO credit_ledger (user_id, amount, reason)
+                    VALUES (%s, %s, %s)
+                """, (user_id, reward_credits, f"bundle_claim_{bundle_id}"))
+            except Exception:
+                pass
+
+            return {
+                "success": True, 
+                "bundle_id": bundle_id, 
+                "reward_credits": reward_credits, 
+                "new_balance": new_credits,
+                "message": f"🎉 {bundle_name} claimed! +{reward_credits} Credit added."
+            }
+    except Exception as e:
+        logging.error(f"Error in claim_onboarding_bundle for user {user_id}: {e}")
+        return {"success": False, "reason": "error", "message": "Could not claim onboarding reward bundle."}
+    finally:
+        conn.close()
+

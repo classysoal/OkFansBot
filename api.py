@@ -458,11 +458,8 @@ def get_verification_status(current_user: dict = Depends(get_current_user)):
     req_count = min(total_channels, (claimed_count + 1) * batch_size) if not current_user.get("starter_completed", 0) else total_channels
     
     required_list = active_channels[:req_count]
-    return {
-        "is_completed": bool(current_user.get("starter_completed", 0)),
-        "required_channels": required_list,
-        "total_required": len(required_list)
-    }
+    return VerificationService.get_persisted_verification_summary(user_id, required_list)
+
 
 @app.get("/api/referrals")
 def get_referrals(current_user: dict = Depends(get_current_user)):
