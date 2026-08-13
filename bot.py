@@ -30,13 +30,12 @@ import database
 import messages
 from keyboards import (
     get_home_keyboard,
-    get_unverified_home_keyboard,
-    get_verified_home_keyboard,
     get_step1_join_keyboard,
     get_verification_failed_keyboard,
     get_back_keyboard,
     get_admin_keyboard
 )
+
 from services.verification import VerificationManager, StateMachine
 from services.video_catalog import VideoCatalog
 from services.rewards import RewardManager
