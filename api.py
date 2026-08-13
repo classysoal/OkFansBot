@@ -942,6 +942,18 @@ def get_admin_daily_diagnostic(user_id: int, admin: dict = Depends(get_admin_use
         "next_available_at": next_avail
     }
 
+@app.get("/api/admin/ledger-audit")
+def get_admin_ledger_audit(user_id: int, admin: dict = Depends(get_admin_user)):
+    """
+    Computes ledger sum and compares against users.credits authoritative balance.
+    Enforces INVARIANT 5, 6, and 15.
+    """
+    audit = database.get_credit_ledger_audit(user_id)
+    if "error" in audit:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
+    return audit
+
+
 if __name__ == "__main__":
 
     import uvicorn

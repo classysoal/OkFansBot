@@ -2007,3 +2007,42 @@ def claim_onboarding_bundle(user_id: int, bundle_id: int = 1) -> dict:
     finally:
         conn.close()
 
+def get_credit_ledger_audit(user_id: int) -> dict:
+    """
+    Computes ledger sum and compares against users.credits authoritative balance.
+    Enforces INVARIANT 5, 6, and 15.
+    """
+
+    user = get_user(user_id)
+    if not user:
+        return {"user_id": user_id, "error": "user_not_found"}
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ledger_id, amount, reason, created_at FROM credit_ledger WHERE user_id = %s ORDER BY created_at ASC", (user_id,))
+        rows = [dict(r) for r in cursor.fetchall()]
+
+        sum_in = sum(r['amount'] for r in rows if r['amount'] > 0)
+        sum_out = sum(r['amount'] for r in rows if r['amount'] < 0)
+        net_sum = sum_in + sum_out
+        auth_balance = user.get('credits', 0)
+
+        for r in rows:
+            if hasattr(r.get('created_at'), 'isoformat'):
+                r['created_at'] = r['created_at'].isoformat()
+
+        return {
+            "user_id": user_id,
+            "authoritative_balance": auth_balance,
+            "net_ledger_sum": net_sum,
+            "total_credited": sum_in,
+            "total_debited": abs(sum_out),
+            "is_reconciled": (net_sum == auth_balance),
+            "ledger_entries_count": len(rows),
+            "ledger_history": rows
+        }
+    finally:
+        conn.close()
+
+
