@@ -322,7 +322,32 @@ def init_db():
         );
         """)
 
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reward_redemptions (
+            redemption_id VARCHAR(64) PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(user_id),
+            status VARCHAR(50) NOT NULL DEFAULT 'RESERVED',
+            requested_count INT NOT NULL DEFAULT 5,
+            delivered_count INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reward_redemption_items (
+            id SERIAL PRIMARY KEY,
+            redemption_id VARCHAR(64) NOT NULL REFERENCES reward_redemptions(redemption_id),
+            video_id INT NOT NULL,
+            status VARCHAR(50) NOT NULL DEFAULT 'RESERVED',
+            telegram_message_id BIGINT,
+            sent_at TIMESTAMP,
+            UNIQUE(redemption_id, video_id)
+        );
+        """)
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);")
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id, read) WHERE read = FALSE;")
 
     else:
@@ -501,6 +526,30 @@ def init_db():
             user_id INTEGER,
             details TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reward_redemptions (
+            redemption_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(user_id),
+            status TEXT NOT NULL DEFAULT 'RESERVED',
+            requested_count INTEGER NOT NULL DEFAULT 5,
+            delivered_count INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reward_redemption_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            redemption_id TEXT NOT NULL REFERENCES reward_redemptions(redemption_id),
+            video_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'RESERVED',
+            telegram_message_id INTEGER,
+            sent_at TIMESTAMP,
+            UNIQUE(redemption_id, video_id)
         );
         """)
 
@@ -2058,5 +2107,164 @@ def get_credit_ledger_audit(user_id: int) -> dict:
         }
     finally:
         conn.close()
+
+
+# --- BATCH REDEMPTION & CONCURRENCY RESERVATION ---
+
+def select_distinct_reward_batch(user_id: int, count: int = 5, max_limit: int = 50) -> list:
+    """
+    Selects N DISTINCT eligible video database records for user_id in ONE single query.
+    Guarantees count(selected_video_ids) == count AND count(unique(selected_video_ids)) == count.
+    Normalizes every item to standard dict with 'video_id' (int) and 'file_id' (str).
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        limit_val = max_limit if (max_limit and max_limit > 0) else 100
+        cursor.execute("""
+            SELECT video_id, file_id, caption, vault
+            FROM videos
+            WHERE is_active = 1
+              AND video_id NOT IN (
+                  SELECT video_id FROM user_video_history WHERE user_id = %s
+              )
+            ORDER BY video_id ASC
+            LIMIT %s
+        """, (user_id, limit_val))
+        
+        rows = cursor.fetchall()
+        unseen_videos = []
+        for r in rows:
+            d = dict(r) if isinstance(r, dict) else {
+                "video_id": r[0],
+                "file_id": r[1],
+                "caption": r[2] if len(r) > 2 else "",
+                "vault": r[3] if len(r) > 3 else "A"
+            }
+            vid = d.get("video_id") or d.get("id")
+            fid = d.get("file_id")
+            if vid and fid:
+                unseen_videos.append({
+                    "video_id": int(vid),
+                    "file_id": str(fid),
+                    "caption": d.get("caption") or "",
+                    "vault": d.get("vault") or "A"
+                })
+
+        seen_batch_ids = set()
+        distinct_batch = []
+        for v in unseen_videos:
+            if v["video_id"] not in seen_batch_ids:
+                seen_batch_ids.add(v["video_id"])
+                distinct_batch.append(v)
+                if len(distinct_batch) == count:
+                    break
+                    
+        return distinct_batch
+    except Exception as e:
+        logging.error(f"Error in select_distinct_reward_batch for user {user_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_active_user_redemption(user_id: int) -> dict:
+    """
+    Returns active in-progress redemption for user_id if one exists (created in last 5 minutes).
+    Enforces ONE active redemption per user invariant.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT redemption_id, user_id, status, requested_count, delivered_count, created_at
+            FROM reward_redemptions
+            WHERE user_id = %s AND status IN ('RESERVED', 'DELIVERING')
+            ORDER BY created_at DESC LIMIT 1
+        """, (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        logging.error(f"Error checking active redemption for user {user_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+def create_redemption_reservation(redemption_id: str, user_id: int, batch: list) -> bool:
+    """
+    Creates a reward_redemptions row and associated reward_redemption_items rows atomically.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            
+            cursor.execute("""
+                INSERT INTO reward_redemptions (redemption_id, user_id, status, requested_count, delivered_count, created_at)
+                VALUES (%s, %s, 'RESERVED', %s, 0, %s)
+            """, (redemption_id, user_id, len(batch), now_str))
+            
+            for item in batch:
+                cursor.execute("""
+                    INSERT INTO reward_redemption_items (redemption_id, video_id, status, sent_at)
+                    VALUES (%s, %s, 'RESERVED', %s)
+                """, (redemption_id, item["video_id"], now_str))
+            return True
+    except Exception as e:
+        logging.error(f"Error creating redemption reservation {redemption_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_redemption_item_delivered(redemption_id: str, video_id: int, message_id: int) -> bool:
+    """
+    Marks a single item as DELIVERED in reward_redemption_items and increments delivered_count in reward_redemptions.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            
+            cursor.execute("""
+                UPDATE reward_redemption_items
+                SET status = 'DELIVERED', telegram_message_id = %s, sent_at = %s
+                WHERE redemption_id = %s AND video_id = %s
+            """, (message_id, now_str, redemption_id, video_id))
+            
+            cursor.execute("""
+                UPDATE reward_redemptions
+                SET delivered_count = delivered_count + 1, status = 'DELIVERING'
+                WHERE redemption_id = %s
+            """, (redemption_id,))
+            return True
+    except Exception as e:
+        logging.error(f"Error updating redemption item delivered: {e}")
+        return False
+    finally:
+        conn.close()
+
+def finalize_redemption_status(redemption_id: str, status: str) -> bool:
+    """
+    Finalizes reward_redemptions status ('COMPLETED', 'PARTIALLY_DELIVERED', or 'FAILED') with completed_at timestamp.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            cursor.execute("""
+                UPDATE reward_redemptions
+                SET status = %s, completed_at = %s
+                WHERE redemption_id = %s
+            """, (status, now_str, redemption_id))
+            return True
+    except Exception as e:
+        logging.error(f"Error finalizing redemption status {redemption_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
 
 

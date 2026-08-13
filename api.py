@@ -527,6 +527,23 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
         )
 
     # 2. VIP Tier and Credit Cost Check
+    # 1. Active redemption lock check (enforces 1 active redemption per user)
+    active_red = database.get_active_user_redemption(user_id)
+    if active_red:
+        return JSONResponse(
+            status_code=409,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "REDEMPTION_IN_PROGRESS",
+                    "message": "A reward redemption is currently in progress for your chat. Please wait a moment."
+                },
+                "request_id": req_id
+            }
+        )
+
+    # 2. Check credit balance
     vip_info = database.get_user_vip_tier_info(user_id)
     required_cost = vip_info["credit_cost"]
     bundle_size = vip_info["bundle_size"]
@@ -546,9 +563,44 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # 3. Deduct credit atomically
-    deducted = database.deduct_credits(user_id, required_cost, "video_bundle_redeem")
+    # 3. Batch candidate selection (Single query returning N DISTINCT unseen videos)
+    unlocked_limit = config.get("unlocked_video_limit", 50)
+    distinct_batch = database.select_distinct_reward_batch(user_id, count=bundle_size, max_limit=unlocked_limit)
+    
+    if not distinct_batch or len(distinct_batch) < 1:
+        return JSONResponse(
+            status_code=400,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "NO_ELIGIBLE_CONTENT",
+                    "message": "No unseen reward videos available in vault. Your credit remains untouched!"
+                },
+                "request_id": req_id
+            }
+        )
+
+    # 4. Create reservation & deduct credit atomically
+    redemption_id = f"red_{uuid.uuid4().hex[:12]}"
+    reserved = database.create_redemption_reservation(redemption_id, user_id, distinct_batch)
+    if not reserved:
+        return JSONResponse(
+            status_code=500,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "RESERVATION_FAILED",
+                    "message": "Could not reserve redemption session. Please try again."
+                },
+                "request_id": req_id
+            }
+        )
+
+    deducted = database.deduct_credits(user_id, required_cost, f"redeem_{redemption_id}")
     if not deducted:
+        database.finalize_redemption_status(redemption_id, "FAILED")
         return JSONResponse(
             status_code=400,
             headers={"X-Request-ID": req_id},
@@ -562,46 +614,18 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # 4. Select unseen videos for user
-    vault_mapping = ["A", "B", "C", "D", "E"]
-    user_vault_ptr = current_user.get("vault_pointer") or 0
-    unlocked_limit = config.get("unlocked_video_limit", 50)
-    
-    delivered_videos = []
-    for item_idx in range(bundle_size):
-        active_vault = vault_mapping[(user_vault_ptr + item_idx) % len(vault_mapping)]
-        video = VideoCatalog.get_next_video(user_id, active_vault, max_limit=unlocked_limit)
-        if not video:
-            video = VideoCatalog.get_next_video(user_id, "B", max_limit=unlocked_limit)
-        if not video:
-            break
-        delivered_videos.append(video)
-
-    if not delivered_videos:
-        database.add_credits(user_id, required_cost, "refund_no_videos")
-        return JSONResponse(
-            status_code=400,
-            headers={"X-Request-ID": req_id},
-            content={
-                "ok": False,
-                "error": {
-                    "code": "NO_ELIGIBLE_CONTENT",
-                    "message": "No new unseen videos available right now. Your credit was refunded!"
-                },
-                "request_id": req_id
-            }
-        )
-
-    # 5. Deliver videos via Telegram Bot API
+    # 5. Deliver distinct videos via Telegram Bot API
     import httpx
     expiry_delay = int(config.get("video_deletion_delay_seconds", 1800))
     del_minutes = max(1, expiry_delay // 60)
     
     delivered_count = 0
+    delivered_vids = []
     async with httpx.AsyncClient() as client:
-        for idx, video in enumerate(delivered_videos):
+        for idx, video in enumerate(distinct_batch):
+            vid_id = video["video_id"]
             caption_text = (
-                f"🎁 <b>{vip_info['badge']} VIP Reward Item ({idx + 1}/{len(delivered_videos)})</b>\n\n"
+                f"🎁 <b>{vip_info['badge']} VIP Reward Item ({idx + 1}/{len(distinct_batch)})</b>\n\n"
                 f"{video['caption'] or ''}\n\n"
                 f"⏱️ <i>This item will automatically delete in {del_minutes} minutes. Save it now!</i>"
             )
@@ -620,20 +644,27 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
                 )
                 if res.status_code == 200:
                     delivered_count += 1
-                    canonical_vid = video.get("video_id") or video.get("id") or 0
+                    delivered_vids.append(vid_id)
                     msg_id = res.json().get("result", {}).get("message_id", 0)
-                    if canonical_vid > 0:
-                        database.record_video_delivery(user_id, canonical_vid, user_id, msg_id, expiry_delay)
-                    else:
-                        logger.warning(f"[{req_id}] Missing canonical video_id for video file {video.get('file_id')}")
+                    database.update_redemption_item_delivered(redemption_id, vid_id, msg_id)
+                    database.record_video_delivery(user_id, vid_id, user_id, msg_id, expiry_delay)
                 else:
                     logger.warning(f"[{req_id}] Telegram sendVideo returned HTTP {res.status_code}")
             except Exception as e:
                 logger.error(f"[{req_id}] Telegram sendVideo exception for user {user_id}: {e}")
 
-    # If delivery failed completely, refund credit safely
+    # 6. Finalize status and handle refunds on complete failure
+    if delivered_count == len(distinct_batch):
+        final_status = "COMPLETED"
+    elif delivered_count > 0:
+        final_status = "PARTIALLY_DELIVERED"
+    else:
+        final_status = "FAILED"
+
+    database.finalize_redemption_status(redemption_id, final_status)
+
     if delivered_count == 0:
-        database.add_credits(user_id, required_cost, "refund_delivery_failed")
+        database.add_credits(user_id, required_cost, f"refund_{redemption_id}")
         return JSONResponse(
             status_code=502,
             headers={"X-Request-ID": req_id},
@@ -647,22 +678,24 @@ async def redeem_video_bundle(request: Request, response: Response, current_user
             }
         )
 
-    # Use correct database function: save_user_last_bundle
-    database.save_user_last_bundle(user_id, [v.get("video_id") or v.get("id") for v in delivered_videos if (v.get("video_id") or v.get("id"))])
+    database.save_user_last_bundle(user_id, delivered_vids)
     database.increment_claimed_count(user_id)
     
     updated_user = database.get_user(user_id)
     response.headers["X-Cache-Invalidate"] = "dashboard,me"
     return {
         "ok": True,
+        "status": final_status,
         "data": {
-            "status": "REDEEMED",
-            "bundle_size": delivered_count,
+            "redemption_id": redemption_id,
+            "requested_count": len(distinct_batch),
+            "delivered_count": delivered_count,
             "new_credits": updated_user.get("credits", 0) if updated_user else 0,
             "message": f"🎉 {delivered_count} VIP Reward Videos delivered directly to your Telegram chat!"
         },
         "request_id": req_id
     }
+
 
 
 

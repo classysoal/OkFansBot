@@ -84,5 +84,33 @@ class StagingAcceptanceGateTests(unittest.TestCase):
         audit = database.get_credit_ledger_audit(test_uid)
         self.assertTrue(audit.get("is_reconciled"), f"Ledger audit failed reconciliation: {audit}")
 
+    def test_distinct_batch_selection_and_concurrency_lock(self):
+        """Verifies single-query distinct batch selection and active redemption concurrency lock."""
+        test_uid = 6193742824
+        user = database.get_user(test_uid)
+        if not user:
+            database.upsert_user_by_telegram_id(test_uid, "tester", "GateTester")
+
+        # 1. Batch selection must return distinct items
+        batch = database.select_distinct_reward_batch(test_uid, count=5)
+        if batch:
+            v_ids = [v["video_id"] for v in batch]
+            self.assertEqual(len(v_ids), len(set(v_ids)), f"Duplicate video IDs found in batch: {v_ids}")
+        
+        # 2. Redemption reservation and active lock test
+        red_id = "test_red_123"
+        ok = database.create_redemption_reservation(red_id, test_uid, batch or [{"video_id": 999, "file_id": "test_f"}])
+        self.assertTrue(ok)
+        
+        active_red = database.get_active_user_redemption(test_uid)
+        self.assertIsNotNone(active_red)
+        self.assertEqual(active_red["redemption_id"], red_id)
+        
+        # Finalize status
+        database.finalize_redemption_status(red_id, "COMPLETED")
+        active_after = database.get_active_user_redemption(test_uid)
+        self.assertIsNone(active_after)
+
 if __name__ == '__main__':
     unittest.main()
+
