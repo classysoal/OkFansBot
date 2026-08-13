@@ -125,7 +125,13 @@ def init_db():
             except Exception:
                 pass
 
+        try:
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_user_id ON users(user_id);")
+        except Exception:
+            pass
+
         cursor.execute("""
+
         CREATE TABLE IF NOT EXISTS required_channels (
             id SERIAL PRIMARY KEY,
             channel_id BIGINT UNIQUE,
