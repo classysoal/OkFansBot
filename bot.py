@@ -1092,17 +1092,13 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def resolve_target_user_from_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_message and update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user:
         target_uid = update.effective_message.reply_to_message.from_user.id
-        user = database.get_user(target_uid)
-        if user:
-            return user
-            
+        return database.get_user(target_uid)
     if context.args and len(context.args) > 0:
         arg = context.args[0].strip()
         if arg.isdigit():
             return database.get_user(int(arg))
         else:
             return database.get_user_by_username(arg)
-            
     return None
 
 async def admin_give_credits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1111,59 +1107,86 @@ async def admin_give_credits_command(update: Update, context: ContextTypes.DEFAU
         return
 
     target_user = None
-    amount_arg = None
+    amount = None
+    target_identifier = None
 
-    if context.args:
-        if len(context.args) == 1:
+    # Check 1: Reply to message (e.g. /addcredits 50 in reply to user)
+    if update.effective_message and update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user:
+        replied_user = update.effective_message.reply_to_message.from_user
+        target_user = database.get_user(replied_user.id)
+        if not target_user:
+            database.register_user(replied_user.id, replied_user.username or "", replied_user.first_name or "User")
+            target_user = database.get_user(replied_user.id)
+        if context.args and len(context.args) >= 1:
             try:
-                amount_arg = context.args[0]
-                amount = int(amount_arg)
-                target_user = database.get_user(OWNER_ID)
+                amount = int(context.args[0])
             except ValueError:
                 pass
+
+    # Check 2: Command arguments
+    if not target_user and context.args:
+        if len(context.args) == 1:
+            try:
+                amount = int(context.args[0])
+                target_user = database.get_user(OWNER_ID)
+            except ValueError:
+                target_identifier = context.args[0]
         elif len(context.args) >= 2:
-            amount_arg = context.args[1]
+            target_identifier = context.args[0]
+            try:
+                amount = int(context.args[1])
+            except ValueError:
+                await update.effective_chat.send_message("⚠️ Amount must be a valid integer number. E.g. <code>/addcredits 50</code>", parse_mode="HTML")
+                return
+
+    # Check 3: Resolve target_identifier
+    if not target_user and target_identifier:
+        clean_id = target_identifier.strip()
+        if clean_id.isdigit():
+            target_user = database.get_user(int(clean_id))
+        else:
+            target_user = database.get_user_by_username(clean_id)
 
     if not target_user:
-        target_user = resolve_target_user_from_update(update, context)
-        if update.effective_message and update.effective_message.reply_to_message and context.args:
-            amount_arg = context.args[0]
-
-    if not target_user:
-        await update.effective_chat.send_message(
-            "⚠️ <b>Credit Adjustment Usage</b>\n\n"
-            "• <code>/addcredits [amount]</code> (adds directly to your owner balance)\n"
-            "• <code>/addcredits [user_id or @username] [amount]</code>\n"
-            "• Or reply to a user message: <code>/addcredits [amount]</code>",
-            parse_mode="HTML"
-        )
+        if target_identifier:
+            await update.effective_chat.send_message(
+                f"⚠️ <b>User Not Found</b>\n\nCould not find user <code>{target_identifier}</code> in database. Make sure the user has started @OkFansBot or use their numeric Telegram User ID.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.effective_chat.send_message(
+                "⚠️ <b>Credit Adjustment Usage</b>\n\n"
+                "• <code>/addcredits [amount]</code> (adds directly to your balance)\n"
+                "• <code>/addcredits [user_id or @username] [amount]</code>\n"
+                "• Or reply to a user message: <code>/addcredits [amount]</code>",
+                parse_mode="HTML"
+            )
         return
 
-    try:
-        amount = int(amount_arg)
-    except (TypeError, ValueError):
-        await update.effective_chat.send_message("⚠️ Amount must be an integer number.")
+    if amount is None or amount <= 0:
+        await update.effective_chat.send_message("⚠️ Amount must be a positive integer. E.g. <code>/addcredits 50</code>", parse_mode="HTML")
         return
-
 
     target_uid = target_user["user_id"]
     if database.add_credits(target_uid, amount, "admin_adjust"):
         database.log_admin_action(OWNER_ID, "give_credits", f"Credits: {amount} to user {target_uid}")
         new_user = database.get_user(target_uid)
         await update.effective_chat.send_message(
-            f"✅ <b>Credits Updated!</b>\n\n• User: <b>{target_user['first_name']}</b> (ID: <code>{target_uid}</code>)\n• Amount: <b>+{amount} 🪙</b>\n• New Balance: <b>{new_user['credits']} 🪙</b>",
+            f"✅ <b>Credits Updated!</b>\n\n• User: <b>{target_user.get('first_name', 'User')}</b> (ID: <code>{target_uid}</code>)\n• Added: <b>+{amount} 🪙</b>\n• New Authoritative Balance: <b>{new_user['credits']} 🪙</b>",
             parse_mode="HTML"
         )
         try:
-            await context.bot.send_message(
-                chat_id=target_uid,
-                text=f"🎉 <b>Credit Reward Added!</b>\n\nAdmin has added <b>+{amount} Credits 🪙</b> to your account!\n• Your Total Balance: <b>{new_user['credits']} 🪙</b>",
-                parse_mode="HTML"
-            )
+            if target_uid != OWNER_ID:
+                await context.bot.send_message(
+                    chat_id=target_uid,
+                    text=f"🎉 <b>Credit Reward Added!</b>\n\nAdmin has added <b>+{amount} Credits 🪙</b> to your account!\n• Your Total Balance: <b>{new_user['credits']} 🪙</b>",
+                    parse_mode="HTML"
+                )
         except Exception:
             pass
     else:
         await update.effective_chat.send_message("❌ Failed to adjust credits in database.")
+
 
 async def admin_ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_incoming_cmd(update)

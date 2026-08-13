@@ -89,19 +89,40 @@ async function _request(method, path, body = null) {
         data = await response.text();
       }
 
-      if (!response.ok) {
-        // Try to extract typed error code from response body
-        const errorCode = data?.error || ERROR_CODES[response.status] || 'SERVER_ERROR';
-        const message = data?.message || ERROR_MESSAGES[errorCode] || 'An error occurred.';
+      if (!response.ok || data?.ok === false) {
+        const errObj = data?.error;
+        const reqId = response.headers.get('X-Request-ID') || data?.request_id;
         
-        // Special handling for auth expiry vs auth required
-        const finalCode = (response.status === 401 && data?.detail?.includes('Expired')) 
-          ? 'AUTH_EXPIRED' : errorCode;
-        
-        return { ok: false, error: finalCode, message, status: response.status };
+        let errorCode = 'SERVER_ERROR';
+        let message = 'An unexpected error occurred.';
+
+        if (typeof errObj === 'object' && errObj !== null) {
+          errorCode = errObj.code || errorCode;
+          message = errObj.message || message;
+        } else if (typeof errObj === 'string') {
+          errorCode = errObj;
+          message = data?.message || data?.detail || ERROR_MESSAGES[errorCode] || message;
+        } else if (data?.detail) {
+          message = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+          errorCode = ERROR_CODES[response.status] || 'SERVER_ERROR';
+        }
+
+        if (response.status === 401 && (message.includes('Expired') || errorCode === 'AUTH_EXPIRED')) {
+          errorCode = 'AUTH_EXPIRED';
+        }
+
+        return { 
+          ok: false, 
+          error: errorCode, 
+          message, 
+          status: response.status,
+          requestId: reqId,
+          data: data?.data
+        };
       }
 
-      return { ok: true, data };
+      return { ok: true, data: data?.data || data };
+
     } catch (err) {
       clearTimeout(timeout);
       if (err.name === 'AbortError') {

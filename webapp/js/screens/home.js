@@ -242,7 +242,7 @@ function render(data) {
     const res = await ApiClient.claimDaily();
     if (res.ok) {
       TelegramSDK.haptic('success');
-      showToast(res.data.message || `+1 Credit Claimed! Streak: ${res.data.streak || streak + 1} Days`, 'success');
+      showToast(res.data?.message || `+1 Credit Claimed! Streak: ${res.data?.streak || streak + 1} Days`, 'success');
       Cache.evictMutable();
       const dash = await ApiClient.getDashboard();
       if (dash.ok) {
@@ -253,8 +253,16 @@ function render(data) {
     } else {
       TelegramSDK.haptic('warning');
       showToast(res.message, 'warning');
-      btn.disabled = false;
-      btn.textContent = `🔥 Claim Daily Streak (+1 🪙) • ${streak} Day Streak`;
+      
+      if (res.error === 'ALREADY_CLAIMED') {
+        const hours = res.data?.hours_left || 24;
+        btn.disabled = true;
+        btn.textContent = `✓ Claimed Today (Next in ${hours}h)`;
+      } else {
+        btn.disabled = false;
+        btn.textContent = `🔥 Claim Daily Streak (+1 🪙) • ${streak} Day Streak`;
+      }
     }
   });
+
 }

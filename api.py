@@ -510,24 +510,62 @@ def claim_daily_reward(response: Response, current_user: dict = Depends(get_curr
     return res
 
 @app.post("/api/rewards/redeem")
-async def redeem_video_bundle(response: Response, current_user: dict = Depends(get_current_user)):
+async def redeem_video_bundle(request: Request, response: Response, current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
+    req_id = getattr(request.state, "request_id", f"req_{uuid.uuid4().hex[:12]}")
+    
+    # 1. Verification requirement check
+    if not current_user.get("starter_completed", 0):
+        return JSONResponse(
+            status_code=400,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "NOT_VERIFIED",
+                    "message": "Please complete your partner channel quests before claiming rewards."
+                },
+                "request_id": req_id
+            }
+        )
+
+    # 2. VIP Tier and Credit Cost Check
     vip_info = database.get_user_vip_tier_info(user_id)
     required_cost = vip_info["credit_cost"]
     bundle_size = vip_info["bundle_size"]
     
-    if current_user.get("credits", 0) < required_cost:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail=f"Insufficient balance! 1 Credit required, but you have {current_user.get('credits', 0)} Credits. Invite a friend to earn credits!"
+    current_credits = current_user.get("credits", 0)
+    if current_credits < required_cost:
+        return JSONResponse(
+            status_code=400,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "INSUFFICIENT_CREDITS",
+                    "message": f"You need at least {required_cost} credit to claim video rewards. Invite friends to earn credits!"
+                },
+                "request_id": req_id
+            }
         )
 
-    # Deduct 1 Credit atomically
-    deducted = database.deduct_credits(user_id, required_cost, "video_spend")
+    # 3. Deduct credit atomically
+    deducted = database.deduct_credits(user_id, required_cost, "video_bundle_redeem")
     if not deducted:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not deduct credits from account.")
+        return JSONResponse(
+            status_code=400,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "DEDUCTION_FAILED",
+                    "message": "Could not deduct credits. Please try again."
+                },
+                "request_id": req_id
+            }
+        )
 
-    # Get unseen videos for bundle
+    # 4. Select unseen videos for user
     vault_mapping = ["A", "B", "C", "D", "E"]
     user_vault_ptr = current_user.get("vault_pointer") or 0
     unlocked_limit = config.get("unlocked_video_limit", 50)
@@ -544,8 +582,20 @@ async def redeem_video_bundle(response: Response, current_user: dict = Depends(g
 
     if not delivered_videos:
         database.add_credits(user_id, required_cost, "refund_no_videos")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No new unseen videos available right now. Your credit was refunded.")
+        return JSONResponse(
+            status_code=400,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "NO_ELIGIBLE_CONTENT",
+                    "message": "No new unseen videos available right now. Your credit was refunded!"
+                },
+                "request_id": req_id
+            }
+        )
 
+    # 5. Deliver videos via Telegram Bot API
     import httpx
     expiry_delay = int(config.get("video_deletion_delay_seconds", 1800))
     del_minutes = max(1, expiry_delay // 60)
@@ -574,20 +624,43 @@ async def redeem_video_bundle(response: Response, current_user: dict = Depends(g
                 if res.status_code == 200:
                     delivered_count += 1
                     database.record_video_delivery(user_id, video["video_id"], user_id, res.json().get("result", {}).get("message_id", 0), expiry_delay)
+                else:
+                    logger.warning(f"[{req_id}] Telegram sendVideo returned HTTP {res.status_code}: {res.text}")
             except Exception as e:
-                logger.error(f"Error delivering video {video['video_id']} via API to user {user_id}: {e}")
+                logger.error(f"[{req_id}] Telegram sendVideo exception for video {video['video_id']} to user {user_id}: {e}")
+
+    # If delivery failed completely, refund credit safely
+    if delivered_count == 0:
+        database.add_credits(user_id, required_cost, "refund_delivery_failed")
+        return JSONResponse(
+            status_code=502,
+            headers={"X-Request-ID": req_id},
+            content={
+                "ok": False,
+                "error": {
+                    "code": "TELEGRAM_DELIVERY_FAILED",
+                    "message": "Telegram was unable to deliver media to your chat. Your credit was safely refunded."
+                },
+                "request_id": req_id
+            }
+        )
 
     database.save_last_bundle(user_id, [v["video_id"] for v in delivered_videos])
     database.increment_claimed_count(user_id)
     
     updated_user = database.get_user(user_id)
-    response.headers["X-Cache-Invalidate"] = "dashboard"
+    response.headers["X-Cache-Invalidate"] = "dashboard,me"
     return {
-        "success": True,
-        "bundle_size": delivered_count,
-        "new_credits": updated_user.get("credits", 0) if updated_user else 0,
-        "message": f"🎉 {delivered_count} VIP Reward Videos delivered directly to your Telegram chat!"
+        "ok": True,
+        "data": {
+            "status": "REDEEMED",
+            "bundle_size": delivered_count,
+            "new_credits": updated_user.get("credits", 0) if updated_user else 0,
+            "message": f"🎉 {delivered_count} VIP Reward Videos delivered directly to your Telegram chat!"
+        },
+        "request_id": req_id
     }
+
 
 @app.post("/api/verification/check")
 async def run_verification_check(response: Response, current_user: dict = Depends(get_current_user)):

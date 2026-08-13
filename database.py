@@ -601,26 +601,52 @@ def claim_daily_checkin(user_id: int) -> dict:
                 diff_sec = (now - last_dt).total_seconds()
                 if diff_sec < 86400:
                     hours_remaining = max(1, int((86400 - diff_sec) // 3600))
-                    return {"success": False, "reason": "cooldown", "hours_left": hours_remaining}
-                    
-            new_streak = (user.get("checkin_streak") or 0) + 1
+                    next_avail = (last_dt + timedelta(seconds=86400)).isoformat()
+                    return {
+                        "success": False, 
+                        "reason": "cooldown", 
+                        "hours_left": hours_remaining,
+                        "next_available_at": next_avail
+                    }
+                elif diff_sec >= 172800:
+                    # Missed more than 48h — streak resets to 1
+                    new_streak = 1
+                else:
+                    new_streak = (user.get("checkin_streak") or 0) + 1
+            else:
+                new_streak = 1
+            
             now_str = now.isoformat()
+            new_credits = (user.get("credits") or 0) + 1
             
             cursor.execute("""
                 UPDATE users 
-                SET credits = credits + 1, last_checkin = %s, checkin_streak = %s 
+                SET credits = %s, last_checkin = %s, checkin_streak = %s 
                 WHERE user_id = %s
-            """, (now_str, new_streak, user_id))
+            """, (new_credits, now_str, new_streak, user_id))
             
-            cursor.execute("SELECT credits FROM users WHERE user_id = %s", (user_id,))
-            updated_user = cursor.fetchone()
-            new_credits = updated_user['credits'] if updated_user else user['credits'] + 1
-            return {"success": True, "credits": new_credits, "streak": new_streak}
+            # Atomic ledger entry
+            try:
+                cursor.execute("""
+                    INSERT INTO credit_ledger (user_id, amount, balance_after, reason)
+                    VALUES (%s, %s, %s, %s)
+                """, (user_id, 1, new_credits, "daily_streak_checkin"))
+            except Exception as e:
+                logging.warning(f"Ledger insert note: {e}")
+                
+            next_avail = (now + timedelta(seconds=86400)).isoformat()
+            return {
+                "success": True, 
+                "credits": new_credits, 
+                "streak": new_streak,
+                "next_available_at": next_avail
+            }
     except Exception as e:
         logging.error(f"Error in claim_daily_checkin for user {user_id}: {e}")
         return {"success": False, "reason": "error"}
     finally:
         conn.close()
+
 
 def get_user_vip_tier_info(user_id: int) -> dict:
     conn = get_db_connection()
